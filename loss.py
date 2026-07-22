@@ -24,6 +24,23 @@ class DiceLoss_binary(nn.Module):
         return 1 - dice.mean()
 
 
+class BCEDiceLoss_binary(nn.Module):
+    def __init__(self, bce_weight=0.5, dice_weight=0.5):
+        super().__init__()
+        self.bce_weight = bce_weight
+        self.dice_weight = dice_weight
+        self.bce = nn.BCEWithLogitsLoss()
+        self.dice = DiceLoss_binary()
+
+    def forward(self, inputs, targets):
+        if targets.dim() == 3:
+            targets = targets.unsqueeze(1)
+        targets = targets.float()
+        bce_loss = self.bce(inputs, targets)
+        dice_loss = self.dice(inputs, targets)
+        return self.bce_weight * bce_loss + self.dice_weight * dice_loss
+
+
 class IoU_binary(nn.Module):
     def __init__(self, weight=None, size_average=True):
         super(IoU_binary, self).__init__()

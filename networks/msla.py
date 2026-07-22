@@ -20,28 +20,40 @@ class DepthwiseConv(nn.Module):
 
 class MSLA(nn.Module):
 
-    def __init__(self, dim, num_heads):
+    def __init__(self, dim, num_heads, linear_attn_type="legacy"):
         super().__init__()
         self.dim = dim
         self.num_heads = num_heads
+        self.linear_attn_type = linear_attn_type
 
         self.dw_conv_3x3 = DepthwiseConv(dim // 4, kernel_size=3)
         self.dw_conv_5x5 = DepthwiseConv(dim // 4, kernel_size=5)
         self.dw_conv_7x7 = DepthwiseConv(dim // 4, kernel_size=7)
         self.dw_conv_9x9 = DepthwiseConv(dim // 4, kernel_size=9)
 
-        self.linear_attention = LinearAttention(dim = dim // 4, num_heads = num_heads)
+        self.linear_attention = LinearAttention(
+            dim=dim // 4,
+            num_heads=num_heads,
+            linear_attn_type=linear_attn_type,
+        )
 
         self.final_conv = nn.Conv2d(dim, dim, 1)
 
         self.scale_weights = nn.Parameter(torch.ones(4), requires_grad=True)
 
-    def forward(self, input_):
+    def forward(self, input_, H=None, W=None):
         b, n, c = input_.shape
-        h = int(n ** 0.5)
-        w = int(n ** 0.5)
+        if H is None or W is None:
+            h = int(n ** 0.5)
+            w = int(n ** 0.5)
+            if h * w != n:
+                raise ValueError("MSLA requires explicit H/W for non-square token maps.")
+        else:
+            h, w = H, W
+            if h * w != n:
+                raise ValueError("Token length does not match the provided spatial shape.")
 
-        input_reshaped = input_.view(b, c, h, w)
+        input_reshaped = input_.transpose(1, 2).reshape(b, c, h, w)
 
         split_size = c // 4
         x_3x3 = input_reshaped[:, :split_size, :, :]
@@ -70,7 +82,7 @@ class MSLA(nn.Module):
 
         final_output = self.final_conv(processed_input)
 
-        output_reshaped = final_output.reshape(b, n, self.dim)
+        output_reshaped = final_output.flatten(2).transpose(1, 2).contiguous()
 
 
         return output_reshaped

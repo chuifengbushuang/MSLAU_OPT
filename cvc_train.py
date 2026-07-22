@@ -24,7 +24,7 @@ from torch.autograd import Variable
 from torch.optim import lr_scheduler
 
 from loader import binary_class
-from loss import DiceLoss_binary, IoU_binary
+from loss import BCEDiceLoss_binary, DiceLoss_binary, IoU_binary
 from networks.mslau_net import MSLAU_net
 
 plt = platform.system()
@@ -39,6 +39,26 @@ if not os.path.exists(log_dir):
 
 logging.basicConfig(filename=os.path.join(log_dir, 'mslau_net3.12-1.log'), level=logging.INFO)
 logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
+
+
+def parse_int_tuple(value):
+    if isinstance(value, (tuple, list)):
+        return tuple(int(item) for item in value)
+    parts = [item.strip() for item in str(value).split(',') if item.strip()]
+    if not parts:
+        raise argparse.ArgumentTypeError('Expected a comma-separated list of integers.')
+    return tuple(int(item) for item in parts)
+
+
+def str2bool(value):
+    if isinstance(value, bool):
+        return value
+    value = value.lower()
+    if value in {'true', '1', 'yes', 'y'}:
+        return True
+    if value in {'false', '0', 'no', 'n'}:
+        return False
+    raise argparse.ArgumentTypeError(f'Unsupported boolean value: {value}')
 
 
 def get_train_transform():
@@ -99,9 +119,12 @@ def train_model(model, criterion, optimizer, scheduler, dataloaders, accuracy_me
     loss_list = {'train': [], 'valid': []}
     accuracy_list = {'train': [], 'valid': []}
 
-    best_model_wts = copy.deepcopy(model.state_dict())
+    best_loss_model_wts = copy.deepcopy(model.state_dict())
+    best_iou_model_wts = copy.deepcopy(model.state_dict())
     best_loss = float('inf')
-    best_epoch = 0
+    best_loss_epoch = 0
+    best_iou = float('-inf')
+    best_iou_epoch = 0
 
     for epoch in range(num_epochs):
         logging.info('Epoch {}/{}'.format(epoch, num_epochs - 1))
@@ -150,8 +173,13 @@ def train_model(model, criterion, optimizer, scheduler, dataloaders, accuracy_me
 
             if phase == 'valid' and epoch_loss <= best_loss:
                 best_loss = epoch_loss
-                best_epoch = epoch
-                best_model_wts = copy.deepcopy(model.state_dict())
+                best_loss_epoch = epoch
+                best_loss_model_wts = copy.deepcopy(model.state_dict())
+
+            if phase == 'valid' and epoch_acc >= best_iou:
+                best_iou = epoch_acc
+                best_iou_epoch = epoch
+                best_iou_model_wts = copy.deepcopy(model.state_dict())
 
             if phase == 'train':
                 logging.info('Current learning rate : %f', optimizer.param_groups[0]['lr'])
@@ -159,14 +187,25 @@ def train_model(model, criterion, optimizer, scheduler, dataloaders, accuracy_me
 
         print()
 
-    best_iou = accuracy_list['valid'][best_epoch]
-    save_name = f'best_model_{best_loss:.6f}_epoch_{best_epoch}_{best_iou:.6f}.pth'
-    torch.save(best_model_wts, os.path.join(BASE_DIR, 'save_models', save_name))
+    best_loss_iou = accuracy_list['valid'][best_loss_epoch]
+    best_iou_loss = loss_list['valid'][best_iou_epoch]
+    best_loss_name = f'best_loss_{best_loss:.6f}_epoch_{best_loss_epoch}_{best_loss_iou:.6f}.pth'
+    best_iou_name = f'best_iou_{best_iou:.6f}_epoch_{best_iou_epoch}_{best_iou_loss:.6f}.pth'
+    best_loss_path = os.path.join(BASE_DIR, 'save_models', best_loss_name)
+    best_iou_path = os.path.join(BASE_DIR, 'save_models', best_iou_name)
+    stable_path = os.path.join(BASE_DIR, 'save_models', 'best_model.pth')
+    torch.save(best_loss_model_wts, best_loss_path)
+    torch.save(best_iou_model_wts, best_iou_path)
+    torch.save(best_iou_model_wts, stable_path)
 
     time_elapsed = time.time() - since
     logging.info('Training complete in {:.0f}m {:.0f}s'.format(time_elapsed // 60, time_elapsed % 60))
-    logging.info('Best val loss: {:4f}'.format(best_loss))
-    model.load_state_dict(best_model_wts)
+    logging.info('Best val loss: {:.6f} at epoch %d', best_loss, best_loss_epoch)
+    logging.info('Best val IoU: {:.6f} at epoch %d', best_iou, best_iou_epoch)
+    logging.info('Saved best-loss checkpoint: %s', best_loss_path)
+    logging.info('Saved best-IoU checkpoint: %s', best_iou_path)
+    logging.info('Saved fixed checkpoint: %s', stable_path)
+    model.load_state_dict(best_iou_model_wts)
     return model, loss_list, accuracy_list
 
 
@@ -185,11 +224,30 @@ if __name__ == '__main__':
     parser.add_argument('--dataset', type=str, default='CVC_ClinicDB', help='the path of images')
     parser.add_argument('--csvfile', type=str, default='src/CVC_ClinicDB/test_train_data.csv',
                         help='two columns [image_id,category(train/test)]')
-    parser.add_argument('--loss', default='dice', help='loss type')
+    parser.add_argument('--loss', default='bce_dice', choices=['ce', 'dice', 'bce_dice'], help='loss type')
     parser.add_argument('--batch', type=int, default=8, help='batch size')
     parser.add_argument('--lr', type=float, default=0.0001, help='learning rate')
     parser.add_argument('--epoch', type=int, default=200, help='epoches')
+    parser.add_argument('--gfe_attn_type', type=str, default='msla',
+                        choices=['msla', 'crossformer', 'crossformer_lsda'],
+                        help='attention type used in GFE blocks')
+    parser.add_argument('--linear_attn_type', type=str, default='legacy',
+                        choices=['legacy', 'relu', 'elu'],
+                        help='linear attention kernel used when --gfe_attn_type=msla')
+    parser.add_argument('--gfe_crossformer_group_sizes', type=parse_int_tuple, default=(7, 7),
+                        help='comma-separated group sizes for CrossFormer attention, e.g. 7,7')
+    parser.add_argument('--gfe_crossformer_intervals', type=parse_int_tuple, default=(8, 4),
+                        help='comma-separated intervals for CrossFormer attention, e.g. 8,4')
+    parser.add_argument('--gfe_crossformer_adaptive_interval', action='store_true',
+                        help='enable adaptive interval for CrossFormer attention')
+    parser.add_argument('--edge_guidance_enabled', default=False, type=str2bool,
+                        help='enable the low-risk MEGANet-style edge guidance block after MLAHead')
     args = parser.parse_args()
+
+    if len(args.gfe_crossformer_group_sizes) != 2:
+        raise ValueError('--gfe_crossformer_group_sizes must contain exactly 2 integers.')
+    if len(args.gfe_crossformer_intervals) != 2:
+        raise ValueError('--gfe_crossformer_intervals must contain exactly 2 integers.')
 
     os.makedirs(os.path.join(BASE_DIR, 'save_models'), exist_ok=True)
 
@@ -225,7 +283,27 @@ if __name__ == '__main__':
     )
     dataloaders = {'train': train_loader, 'valid': val_loader}
 
-    model_ft = MSLAU_net(img_size=256, mla_channels=64, in_chans=3, num_classes=1)
+    model_ft = MSLAU_net(
+        img_size=256,
+        mla_channels=64,
+        in_chans=3,
+        num_classes=1,
+        gfe_attn_type=args.gfe_attn_type,
+        gfe_crossformer_group_sizes=args.gfe_crossformer_group_sizes,
+        gfe_crossformer_intervals=args.gfe_crossformer_intervals,
+        gfe_crossformer_adaptive_interval=args.gfe_crossformer_adaptive_interval,
+        edge_guidance_enabled=args.edge_guidance_enabled,
+        linear_attn_type=args.linear_attn_type,
+    )
+    logging.info(
+        'Model config: type=%s, linear_attn_type=%s, group_sizes=%s, intervals=%s, adaptive_interval=%s, edge_guidance_enabled=%s',
+        args.gfe_attn_type,
+        args.linear_attn_type,
+        args.gfe_crossformer_group_sizes,
+        args.gfe_crossformer_intervals,
+        args.gfe_crossformer_adaptive_interval,
+        args.edge_guidance_enabled,
+    )
     load_encoder_pretrained(model_ft)
     if torch.cuda.is_available():
         model_ft = model_ft.cuda()
@@ -234,6 +312,8 @@ if __name__ == '__main__':
         criterion = nn.BCEWithLogitsLoss()
     elif args.loss == 'dice':
         criterion = DiceLoss_binary()
+    elif args.loss == 'bce_dice':
+        criterion = BCEDiceLoss_binary()
     else:
         raise ValueError(f'Unsupported loss type: {args.loss}')
 
