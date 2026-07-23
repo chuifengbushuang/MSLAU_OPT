@@ -8,10 +8,6 @@ import random
 import sys
 import time
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
-os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
-os.environ["KMP_DUPLICATE_LIB_OK"] = "True"
-
 import albumentations as A
 import numpy as np
 import torch
@@ -23,29 +19,28 @@ from torch.optim import lr_scheduler
 from torch.utils.data import DataLoader
 
 from loader import binary_class
-from loss import DiceLoss_binary, IoU_binary
+from loss import BCEDiceLoss_binary, DiceLoss_binary, IoU_binary
 from networks.mslau_net import MSLAU_net
 
 if platform.system() != "Windows":
     pathlib.WindowsPath = pathlib.PosixPath
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-LOG_DIR = os.path.join(BASE_DIR, "logs")
-SAVE_DIR = os.path.join(BASE_DIR, "save_models")
-
-os.makedirs(LOG_DIR, exist_ok=True)
-os.makedirs(SAVE_DIR, exist_ok=True)
-
-logging.basicConfig(
-    filename=os.path.join(LOG_DIR, "kvasir_train-3.13.log"),
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(message)s",
-)
-logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
 
 
 def resolve_path(path):
     return path if os.path.isabs(path) else os.path.join(BASE_DIR, path)
+
+
+def configure_logging(log_dir):
+    os.makedirs(log_dir, exist_ok=True)
+    logging.basicConfig(
+        filename=os.path.join(log_dir, "kvasir_train.log"),
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(message)s",
+        force=True,
+    )
+    logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
 
 
 def load_ids(txt_path):
@@ -78,10 +73,9 @@ def get_valid_transform():
     )
 
 
-def load_encoder_pretrained(model):
-    candidate_paths = [
-        os.path.join(BASE_DIR, "pretrained", "best.pth"),
-        os.path.join(os.path.dirname(BASE_DIR), "pretrained", "best.pth"),
+def load_encoder_pretrained(model, requested_path=None):
+    candidate_paths = [resolve_path(requested_path)] if requested_path else [
+        os.path.join(BASE_DIR, "pretrained", "best.pth")
     ]
     pretrained_path = next((path for path in candidate_paths if os.path.exists(path)), None)
     if pretrained_path is None:
@@ -108,11 +102,14 @@ def load_encoder_pretrained(model):
     logging.info("Pretrained load result: %s", msg)
 
 
-def train_model(model, criterion, optimizer, scheduler, dataloaders, metric, num_epochs):
+def train_model(model, criterion, optimizer, scheduler, dataloaders, metric, num_epochs, save_dir):
     since = time.time()
     best_loss = float("inf")
-    best_epoch = 0
-    best_model_wts = copy.deepcopy(model.state_dict())
+    best_loss_epoch = 0
+    best_loss_model_wts = copy.deepcopy(model.state_dict())
+    best_iou = float("-inf")
+    best_iou_epoch = 0
+    best_iou_model_wts = copy.deepcopy(model.state_dict())
 
     loss_list = {"train": [], "valid": []}
     accuracy_list = {"train": [], "valid": []}
@@ -127,8 +124,9 @@ def train_model(model, criterion, optimizer, scheduler, dataloaders, metric, num
             else:
                 model.eval()
 
-            running_loss = []
-            running_corrects = []
+            running_loss = 0.0
+            running_iou = 0.0
+            running_samples = 0
 
             for inputs, labels, _ in dataloaders[phase]:
                 if torch.cuda.is_available():
@@ -151,11 +149,13 @@ def train_model(model, criterion, optimizer, scheduler, dataloaders, metric, num
                         loss.backward()
                         optimizer.step()
 
-                running_loss.append(loss.item())
-                running_corrects.append(score.item())
+                batch_samples = inputs.size(0)
+                running_loss += loss.item() * batch_samples
+                running_iou += score.item() * batch_samples
+                running_samples += batch_samples
 
-            epoch_loss = np.mean(running_loss)
-            epoch_acc = np.mean(running_corrects)
+            epoch_loss = running_loss / running_samples
+            epoch_acc = running_iou / running_samples
 
             logging.info("{} Loss: {:.4f} IoU: {:.4f}".format(phase, epoch_loss, epoch_acc))
 
@@ -164,8 +164,13 @@ def train_model(model, criterion, optimizer, scheduler, dataloaders, metric, num
 
             if phase == "valid" and epoch_loss <= best_loss:
                 best_loss = epoch_loss
-                best_epoch = epoch
-                best_model_wts = copy.deepcopy(model.state_dict())
+                best_loss_epoch = epoch
+                best_loss_model_wts = copy.deepcopy(model.state_dict())
+
+            if phase == "valid" and epoch_acc >= best_iou:
+                best_iou = epoch_acc
+                best_iou_epoch = epoch
+                best_iou_model_wts = copy.deepcopy(model.state_dict())
 
             if phase == "train":
                 logging.info("Current learning rate : %f", optimizer.param_groups[0]["lr"])
@@ -173,20 +178,30 @@ def train_model(model, criterion, optimizer, scheduler, dataloaders, metric, num
 
         print()
 
-    best_iou = accuracy_list["valid"][best_epoch]
-    best_name = f"best_model_{best_loss:.6f}_epoch_{best_epoch}_{best_iou:.6f}.pth"
-    dynamic_path = os.path.join(SAVE_DIR, best_name)
-    stable_path = os.path.join(SAVE_DIR, "kvasir_best_model.pth")
-    torch.save(best_model_wts, dynamic_path)
-    torch.save(best_model_wts, stable_path)
+    best_loss_iou = accuracy_list["valid"][best_loss_epoch]
+    best_iou_loss = loss_list["valid"][best_iou_epoch]
+    best_loss_path = os.path.join(
+        save_dir,
+        f"best_loss_{best_loss:.6f}_epoch_{best_loss_epoch}_{best_loss_iou:.6f}.pth",
+    )
+    best_iou_path = os.path.join(
+        save_dir,
+        f"best_iou_{best_iou:.6f}_epoch_{best_iou_epoch}_{best_iou_loss:.6f}.pth",
+    )
+    stable_path = os.path.join(save_dir, "kvasir_best_model.pth")
+    torch.save(best_loss_model_wts, best_loss_path)
+    torch.save(best_iou_model_wts, best_iou_path)
+    torch.save(best_iou_model_wts, stable_path)
 
     time_elapsed = time.time() - since
     logging.info("Training complete in {:.0f}m {:.0f}s".format(time_elapsed // 60, time_elapsed % 60))
-    logging.info("Best val loss: {:4f}".format(best_loss))
-    logging.info("Saved checkpoint: %s", dynamic_path)
-    logging.info("Saved fixed checkpoint: %s", stable_path)
+    logging.info("Best val loss: %.6f at epoch %d", best_loss, best_loss_epoch)
+    logging.info("Best val IoU: %.6f at epoch %d", best_iou, best_iou_epoch)
+    logging.info("Saved best-loss checkpoint: %s", best_loss_path)
+    logging.info("Saved best-IoU checkpoint: %s", best_iou_path)
+    logging.info("Saved fixed best-IoU checkpoint: %s", stable_path)
 
-    model.load_state_dict(best_model_wts)
+    model.load_state_dict(best_iou_model_wts)
     return model, loss_list, accuracy_list
 
 
@@ -206,8 +221,14 @@ if __name__ == "__main__":
     parser.add_argument("--dataset", type=str, default="Kvasir-SEG", help="dataset directory")
     parser.add_argument("--train_txt", type=str, default="Kvasir-SEG/train.txt", help="training ids txt")
     parser.add_argument("--val_txt", type=str, default="Kvasir-SEG/val.txt", help="validation ids txt")
-    parser.add_argument("--loss", default="dice", help="loss type")
-    parser.add_argument("--batch", type=int, default=8, help="batch size")
+    parser.add_argument("--pretrained", type=str, default=None, help="encoder pretrained checkpoint")
+    parser.add_argument("--output_dir", type=str, default="save_models/kvasir", help="checkpoint directory")
+    parser.add_argument("--log_dir", type=str, default="logs/kvasir", help="log directory")
+    parser.add_argument("--num_workers", type=int, default=8, help="dataloader workers")
+    parser.add_argument("--loss", default="bce_dice", choices=["ce", "dice", "bce_dice"], help="loss type")
+    parser.add_argument("--bce_weight", type=float, default=0.5, help="BCE weight in bce_dice loss")
+    parser.add_argument("--dice_weight", type=float, default=0.5, help="Dice weight in bce_dice loss")
+    parser.add_argument("--batch", type=int, default=32, help="batch size")
     parser.add_argument("--lr", type=float, default=1e-4, help="learning rate")
     parser.add_argument("--epoch", type=int, default=200, help="epochs")
     args = parser.parse_args()
@@ -215,13 +236,15 @@ if __name__ == "__main__":
     dataset_path = resolve_path(args.dataset)
     train_txt = resolve_path(args.train_txt)
     val_txt = resolve_path(args.val_txt)
+    output_dir = resolve_path(args.output_dir)
+    log_dir = resolve_path(args.log_dir)
+    os.makedirs(output_dir, exist_ok=True)
+    configure_logging(log_dir)
 
     train_files = load_ids(train_txt)
     val_files = load_ids(val_txt)
-    print(train_files)
-    print(len(train_files))
-    print(val_files)
-    print(len(val_files))
+    print(f"Training samples: {len(train_files)}")
+    print(f"Validation samples: {len(val_files)}")
 
     train_dataset = binary_class(dataset_path, train_files, get_train_transform())
     val_dataset = binary_class(dataset_path, val_files, get_valid_transform())
@@ -231,7 +254,7 @@ if __name__ == "__main__":
         batch_size=args.batch,
         shuffle=True,
         drop_last=True,
-        num_workers=8,
+        num_workers=args.num_workers,
         pin_memory=torch.cuda.is_available(),
     )
     val_loader = DataLoader(
@@ -239,13 +262,13 @@ if __name__ == "__main__":
         batch_size=max(1, args.batch // 2),
         shuffle=False,
         drop_last=False,
-        num_workers=8,
+        num_workers=args.num_workers,
         pin_memory=torch.cuda.is_available(),
     )
     dataloaders = {"train": train_loader, "valid": val_loader}
 
     model = MSLAU_net(img_size=256, mla_channels=64, in_chans=3, num_classes=1)
-    load_encoder_pretrained(model)
+    load_encoder_pretrained(model, args.pretrained)
     if torch.cuda.is_available():
         model = model.cuda()
 
@@ -253,10 +276,24 @@ if __name__ == "__main__":
         criterion = nn.BCEWithLogitsLoss()
     elif args.loss == "dice":
         criterion = DiceLoss_binary()
+    elif args.loss == "bce_dice":
+        criterion = BCEDiceLoss_binary(
+            bce_weight=args.bce_weight,
+            dice_weight=args.dice_weight,
+        )
     else:
         raise ValueError(f"Unsupported loss type: {args.loss}")
 
     metric = IoU_binary()
     optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=5e-4)
     scheduler = lr_scheduler.CosineAnnealingLR(optimizer, args.epoch, eta_min=0, last_epoch=-1)
-    train_model(model, criterion, optimizer, scheduler, dataloaders, metric, num_epochs=args.epoch)
+    train_model(
+        model,
+        criterion,
+        optimizer,
+        scheduler,
+        dataloaders,
+        metric,
+        num_epochs=args.epoch,
+        save_dir=output_dir,
+    )

@@ -41,7 +41,7 @@ class MSLA(nn.Module):
         h = int(n ** 0.5)
         w = int(n ** 0.5)
 
-        input_reshaped = input_.view(b, c, h, w)
+        input_reshaped = input_.transpose(1, 2).reshape(b, c, h, w)
 
         split_size = c // 4
         x_3x3 = input_reshaped[:, :split_size, :, :]
@@ -70,7 +70,7 @@ class MSLA(nn.Module):
 
         final_output = self.final_conv(processed_input)
 
-        output_reshaped = final_output.reshape(b, n, self.dim)
+        output_reshaped = final_output.flatten(2).transpose(1, 2).contiguous()
 
 
         return output_reshaped

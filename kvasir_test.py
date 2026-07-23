@@ -4,11 +4,6 @@ import pathlib
 import platform
 import time
 
-os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
-os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
-os.environ["KMP_DUPLICATE_LIB_OK"] = "True"
-
 import albumentations as A
 import cv2
 import numpy as np

@@ -1,0 +1,9 @@
+albumentations==1.4.24
+numpy<2
+opencv-python-headless==4.10.0.84
+pandas
+scikit-image
+scikit-learn
+timm==1.0.15
+torchvision==0.16.2
+torchmetrics==1.6.1

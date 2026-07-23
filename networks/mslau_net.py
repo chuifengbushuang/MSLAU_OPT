@@ -4,10 +4,11 @@ import torch
 import torch.nn as nn
 from functools import partial
 import torch.nn.functional as F
-from timm.models.layers import trunc_normal_, DropPath, to_2tuple
+from timm.layers import trunc_normal_, DropPath, to_2tuple
 import copy
 
 from networks.msla import MSLA
+from networks.edge_guidance import EdgeGuidedAttention
 
 layer_scale = False
 init_value = 1e-6
@@ -133,7 +134,7 @@ class PatchEmbed(nn.Module):
         x = self.norm(x)
         x = x.reshape(B, H, W, -1).permute(0, 3, 1, 2).contiguous()
         return x
-    
+
     
 class Encoder(nn.Module):
 
@@ -318,7 +319,8 @@ class MLAHead(nn.Module):
 
 class MSLAU_net(nn.Module):
 
-    def __init__(self, img_size=224, mla_channels=64,in_chans=3, num_classes=1):
+    def __init__(self, img_size=224, mla_channels=64,in_chans=3, num_classes=1,
+                 edge_guidance_enabled=True):
         super(MSLAU_net, self).__init__()
         self.img_size = img_size
         self.norm_cfg = None
@@ -326,30 +328,42 @@ class MSLAU_net(nn.Module):
         self.BatchNorm = nn.BatchNorm2d
         self.num_classes = num_classes
         self.in_chans = in_chans
+        self.decoder_channels = 4 * self.mla_channels
+        self.edge_guidance_enabled = edge_guidance_enabled
 
         self.encoder = Encoder(
             depth=[4, 8, 11, 5], img_size=img_size, in_chans=3, num_classes=1, embed_dim=[64, 128, 256, 512],
             head_dim=64, mlp_ratio=4., qkv_bias=True, qk_scale=None)
         self.conv_mla = Conv_MLA(embed_dim=[64, 128, 256, 512], mla_channels=64)
         self.mlahead = MLAHead(mla_channels=64)
-        self.seg = nn.Conv2d(4 * self.mla_channels, self.num_classes, 3, padding=1)
+        self.edge_guidance = EdgeGuidedAttention(channels=self.decoder_channels)
+        self.seg = nn.Conv2d(self.decoder_channels, self.num_classes, 3, padding=1)
 
     def forward(self, inputs):
+        edge_inputs = inputs
         if inputs.size()[1] == 1:
             inputs = inputs.repeat(1, 3, 1, 1)
         encoder_features = self.encoder(inputs)
 
         conv_mla_features = self.conv_mla(encoder_features)
 
-        x = self.mlahead(conv_mla_features)
-        x = self.seg(x)
-        x = F.interpolate(x, size=self.img_size, mode='bilinear',
-                              align_corners=True)
-        return x
+        decoder_features = self.mlahead(conv_mla_features)
+        coarse_logits = self.seg(decoder_features)
+        if self.edge_guidance_enabled:
+            decoder_features = self.edge_guidance(
+                decoder_features,
+                coarse_logits.detach(),
+                image=edge_inputs,
+            )
+            logits = self.seg(decoder_features)
+        else:
+            logits = coarse_logits
+        logits = F.interpolate(logits, size=self.img_size, mode='bilinear',
+                               align_corners=True)
+        return logits
     
-    def load_from(self):
-        pretrained_path = './pretrained/best.pth'#预训练模型路径
-        if pretrained_path is not None:
+    def load_from(self, pretrained_path=None):
+        if pretrained_path:
             print("pretrained_path:{}".format(pretrained_path))
             device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
             pretrained_dict = torch.load(pretrained_path, map_location=device,weights_only=False)#weights_only=False
@@ -364,6 +378,3 @@ class MSLAU_net(nn.Module):
             print(msg)
         else:
             print("none pretrain")
-    
-    
-    

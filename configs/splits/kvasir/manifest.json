@@ -1,0 +1,19 @@
+{
+  "dataset": "Kvasir-SEG",
+  "sample_count": 1000,
+  "seed": 1234,
+  "split_mode": "train_eval_mirrored",
+  "ratios": {
+    "train": 0.88,
+    "evaluation": 0.12
+  },
+  "counts": {
+    "train": 880,
+    "val": 120,
+    "test": 120
+  },
+  "overlap": {
+    "val_test": 120
+  },
+  "filename_sha256": "038d44e29a77de54e46032372266b94a698f64ceac4dc5aff7197863c8bd3f3a"
+}

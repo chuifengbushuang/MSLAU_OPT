@@ -4,11 +4,6 @@ import pathlib
 import platform
 import time
 
-os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
-os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
-os.environ["KMP_DUPLICATE_LIB_OK"] = "True"
-
 import albumentations as A
 import cv2
 import numpy as np
@@ -119,7 +114,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--model",
-        default="save_models/best_model_0.052903_epoch_177_0.902547.pth",
+        default="save_models/cvc/cvc_best_model.pth",
         type=str,
         help="checkpoint path",
     )

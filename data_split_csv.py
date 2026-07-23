@@ -4,7 +4,7 @@ import os
 import argparse
 
 
-def pre_csv(data_path,frac):
+def pre_csv(data_path, frac, output_path):
     np.random.seed(42)
     image_ids = os.listdir(data_path)
     data_size = len(image_ids)
@@ -21,7 +21,9 @@ def pre_csv(data_path,frac):
                'category':ds_split 
         }
     df = pd.DataFrame(ds_dict)
-    df.to_csv('src/ISIC2018/test_train_data.csv',index=False)
+    output_dir = os.path.dirname(os.path.abspath(output_path))
+    os.makedirs(output_dir, exist_ok=True)
+    df.to_csv(output_path, index=False)
     print('Number of train sample: {}'.format(len(train_set)))
     print('Number of test sample: {}'.format(data_size-train_size))
 
@@ -29,9 +31,8 @@ def pre_csv(data_path,frac):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    #parser.add_argument('--dataset', type=str, default='data/', help='the path of dataset')
-    parser.add_argument('--dataset', type=str, default=r'/home/cqut/Data/medical_seg_data/ISIC2018_jpg/images/', help='the path of images') # issue 16
+    parser.add_argument('--dataset', type=str, required=True, help='the path of images')
+    parser.add_argument('--output', type=str, required=True, help='output CSV path')
     parser.add_argument('--size', type=float, default=0.9, help='the size of your train set')
     args = parser.parse_args()
-    os.makedirs('src/',exist_ok=True)
-    pre_csv(args.dataset,args.size)
+    pre_csv(args.dataset, args.size, args.output)
