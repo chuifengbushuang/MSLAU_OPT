@@ -237,9 +237,19 @@ class Encoder(nn.Module):
         return features
 
 class Conv_MLA(nn.Module):
-    def __init__(self, embed_dim=[64, 128, 256, 512], mla_channels=64, norm_cfg=None):
+    def __init__(self, embed_dim=[64, 128, 256, 512], mla_channels=64, norm_cfg=None,
+                 fusion_mode="fixed"):
         super(Conv_MLA, self).__init__()
 
+        if fusion_mode not in {"fixed", "lff_scale"}:
+            raise ValueError("Unsupported fusion mode: {}".format(fusion_mode))
+        self.fusion_mode = fusion_mode
+        if fusion_mode == "lff_scale":
+            # Rows follow encoder stage order: shallow stage 1 -> deep stage 4.
+            # Scaled softmax starts at gamma=1 and keeps each channel's sum at 4.
+            self.fusion_logits = nn.Parameter(torch.zeros(4, mla_channels))
+        else:
+            self.register_parameter("fusion_logits", None)
 
         self.mla_p4 = nn.Sequential(nn.Conv2d(embed_dim[1], mla_channels, 1 ,bias=False),
                                     nn.BatchNorm2d(mla_channels), nn.ReLU(),
@@ -279,6 +289,13 @@ class Conv_MLA(nn.Module):
         uni_mla_p4 = self.mla_p4(uni4)
         uni_mla_p3 = self.mla_p3(uni3)
         uni_mla_p2 = self.mla_p2(uni2)
+
+        if self.fusion_mode == "lff_scale":
+            gamma = 4.0 * torch.softmax(self.fusion_logits, dim=0)
+            uni5 = uni5 * gamma[0].view(1, -1, 1, 1)
+            uni_mla_p4 = uni_mla_p4 * gamma[1].view(1, -1, 1, 1)
+            uni_mla_p3 = uni_mla_p3 * gamma[2].view(1, -1, 1, 1)
+            uni_mla_p2 = uni_mla_p2 * gamma[3].view(1, -1, 1, 1)
 
         mla_p4_plus = uni5 + uni_mla_p4
         mla_p3_plus = mla_p4_plus + uni_mla_p3
@@ -320,7 +337,7 @@ class MLAHead(nn.Module):
 class MSLAU_net(nn.Module):
 
     def __init__(self, img_size=224, mla_channels=64,in_chans=3, num_classes=1,
-                 edge_guidance_enabled=True):
+                 edge_guidance_enabled=True, fusion_mode="fixed", decoder_dropout=0.0):
         super(MSLAU_net, self).__init__()
         self.img_size = img_size
         self.norm_cfg = None
@@ -330,12 +347,16 @@ class MSLAU_net(nn.Module):
         self.in_chans = in_chans
         self.decoder_channels = 4 * self.mla_channels
         self.edge_guidance_enabled = edge_guidance_enabled
+        self.fusion_mode = fusion_mode
+        self.decoder_dropout = nn.Dropout2d(p=decoder_dropout)
 
         self.encoder = Encoder(
             depth=[4, 8, 11, 5], img_size=img_size, in_chans=3, num_classes=1, embed_dim=[64, 128, 256, 512],
             head_dim=64, mlp_ratio=4., qkv_bias=True, qk_scale=None)
-        self.conv_mla = Conv_MLA(embed_dim=[64, 128, 256, 512], mla_channels=64)
-        self.mlahead = MLAHead(mla_channels=64)
+        self.conv_mla = Conv_MLA(
+            embed_dim=[64, 128, 256, 512], mla_channels=mla_channels,
+            fusion_mode=fusion_mode)
+        self.mlahead = MLAHead(mla_channels=mla_channels)
         self.edge_guidance = EdgeGuidedAttention(channels=self.decoder_channels)
         self.seg = nn.Conv2d(self.decoder_channels, self.num_classes, 3, padding=1)
 
@@ -348,6 +369,7 @@ class MSLAU_net(nn.Module):
         conv_mla_features = self.conv_mla(encoder_features)
 
         decoder_features = self.mlahead(conv_mla_features)
+        decoder_features = self.decoder_dropout(decoder_features)
         coarse_logits = self.seg(decoder_features)
         if self.edge_guidance_enabled:
             decoder_features = self.edge_guidance(

@@ -118,6 +118,15 @@ if __name__ == "__main__":
     parser.add_argument("--threshold", default=0.5, type=float, help="binarization threshold")
     parser.add_argument("--debug", default=False, type=str2bool, help="save predicted masks")
     parser.add_argument("--debug_dir", default="debug_kvasir", type=str, help="debug output directory")
+    parser.add_argument("--disable_edge_guidance", action="store_true", help="evaluate the P0-only model")
+    parser.add_argument(
+        "--fusion_mode",
+        default="fixed",
+        choices=["fixed", "lff_scale"],
+        help="feature fusion mode used by the checkpoint",
+    )
+    parser.add_argument("--decoder_dropout", default=0.0, type=float,
+                        help="Dropout2d probability used during training")
     args = parser.parse_args()
 
     dataset_path = resolve_path(args.dataset)
@@ -147,7 +156,15 @@ if __name__ == "__main__":
     )
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = MSLAU_net(img_size=256, mla_channels=64, in_chans=3, num_classes=1)
+    model = MSLAU_net(
+        img_size=256,
+        mla_channels=64,
+        in_chans=3,
+        num_classes=1,
+        edge_guidance_enabled=not args.disable_edge_guidance,
+        fusion_mode=args.fusion_mode,
+        decoder_dropout=args.decoder_dropout,
+    )
     model.load_state_dict(torch.load(model_path, map_location=device, weights_only=False))
     model = model.to(device)
     model.eval()

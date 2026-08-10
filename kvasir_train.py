@@ -102,6 +102,37 @@ def load_encoder_pretrained(model, requested_path=None):
     logging.info("Pretrained load result: %s", msg)
 
 
+FUSION_ROUTE_NAMES = (
+    "stage1_shallow",
+    "stage2",
+    "stage3",
+    "stage4_deep",
+)
+
+
+def log_fusion_scale_stats(model, epoch):
+    fusion_logits = getattr(model.conv_mla, "fusion_logits", None)
+    if fusion_logits is None:
+        return
+
+    with torch.no_grad():
+        gamma = 4.0 * torch.softmax(fusion_logits.detach(), dim=0)
+        for route_index, route_name in enumerate(FUSION_ROUTE_NAMES):
+            route_gamma = gamma[route_index]
+            logging.info(
+                "Fusion gamma epoch=%d route=%s mean=%.6f std=%.6f "
+                "min=%.6f max=%.6f deviation_l1=%.6f",
+                epoch, route_name,
+                route_gamma.mean().item(), route_gamma.std().item(),
+                route_gamma.min().item(), route_gamma.max().item(),
+                (route_gamma - 1.0).abs().mean().item(),
+            )
+        logging.info(
+            "Fusion gamma epoch=%d sum_max_error=%.8e",
+            epoch, (gamma.sum(dim=0) - 4.0).abs().max().item(),
+        )
+
+
 def train_model(model, criterion, optimizer, scheduler, dataloaders, metric, num_epochs, save_dir):
     since = time.time()
     best_loss = float("inf")
@@ -173,8 +204,18 @@ def train_model(model, criterion, optimizer, scheduler, dataloaders, metric, num
                 best_iou_model_wts = copy.deepcopy(model.state_dict())
 
             if phase == "train":
-                logging.info("Current learning rate : %f", optimizer.param_groups[0]["lr"])
+                learning_rates = ", ".join(
+                    "{}={:.8e}".format(
+                        group.get("name", "group_{}".format(index)),
+                        group["lr"],
+                    )
+                    for index, group in enumerate(optimizer.param_groups)
+                )
+                logging.info("Current learning rates: %s", learning_rates)
                 scheduler.step()
+
+        if epoch % 10 == 0 or epoch == num_epochs - 1:
+            log_fusion_scale_stats(model, epoch)
 
         print()
 
@@ -206,16 +247,6 @@ def train_model(model, criterion, optimizer, scheduler, dataloaders, metric, num
 
 
 if __name__ == "__main__":
-    seed = 1234
-    torch.manual_seed(seed)
-    np.random.seed(seed)
-    random.seed(seed)
-    os.environ["PYTHONHASHSEED"] = str(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed(seed)
-        torch.cuda.manual_seed_all(seed)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset", type=str, default="Kvasir-SEG", help="dataset directory")
@@ -230,8 +261,39 @@ if __name__ == "__main__":
     parser.add_argument("--dice_weight", type=float, default=0.5, help="Dice weight in bce_dice loss")
     parser.add_argument("--batch", type=int, default=32, help="batch size")
     parser.add_argument("--lr", type=float, default=1e-4, help="learning rate")
+    parser.add_argument(
+        "--lff_lr",
+        type=float,
+        default=5e-3,
+        help="initial learning rate for LFF fusion parameters",
+    )
+    parser.add_argument("--decoder_dropout", type=float, default=0.0, help="Dropout2d after MLA feature concatenation")
     parser.add_argument("--epoch", type=int, default=200, help="epochs")
+    parser.add_argument("--seed", type=int, default=1234, help="random seed")
+    parser.add_argument(
+        "--disable_edge_guidance",
+        action="store_true",
+        help="disable P2 decoder edge guidance and run the P0-only model",
+    )
+    parser.add_argument(
+        "--fusion_mode",
+        type=str,
+        default="fixed",
+        choices=["fixed", "lff_scale"],
+        help="feature fusion mode in Conv_MLA",
+    )
     args = parser.parse_args()
+    seed = args.seed
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+    os.environ["PYTHONHASHSEED"] = str(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
 
     dataset_path = resolve_path(args.dataset)
     train_txt = resolve_path(args.train_txt)
@@ -240,6 +302,7 @@ if __name__ == "__main__":
     log_dir = resolve_path(args.log_dir)
     os.makedirs(output_dir, exist_ok=True)
     configure_logging(log_dir)
+    logging.info("Random seed: %d", seed)
 
     train_files = load_ids(train_txt)
     val_files = load_ids(val_txt)
@@ -267,7 +330,18 @@ if __name__ == "__main__":
     )
     dataloaders = {"train": train_loader, "valid": val_loader}
 
-    model = MSLAU_net(img_size=256, mla_channels=64, in_chans=3, num_classes=1)
+    model = MSLAU_net(
+        img_size=256,
+        mla_channels=64,
+        in_chans=3,
+        num_classes=1,
+        edge_guidance_enabled=not args.disable_edge_guidance,
+        fusion_mode=args.fusion_mode,
+        decoder_dropout=args.decoder_dropout,
+    )
+    logging.info("Edge guidance enabled: %s", model.edge_guidance_enabled)
+    logging.info("Fusion mode: %s", model.fusion_mode)
+    logging.info("Decoder Dropout2d: %.3f", model.decoder_dropout.p)
     load_encoder_pretrained(model, args.pretrained)
     if torch.cuda.is_available():
         model = model.cuda()
@@ -285,7 +359,32 @@ if __name__ == "__main__":
         raise ValueError(f"Unsupported loss type: {args.loss}")
 
     metric = IoU_binary()
-    optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=5e-4)
+    fusion_logits = getattr(model.conv_mla, "fusion_logits", None)
+    if fusion_logits is None:
+        optimizer = optim.AdamW(
+            [{"params": model.parameters(), "lr": args.lr, "name": "base"}],
+            weight_decay=5e-4,
+        )
+    else:
+        lff_param_ids = {id(fusion_logits)}
+        base_params = [
+            param for param in model.parameters()
+            if id(param) not in lff_param_ids
+        ]
+        optimizer = optim.AdamW(
+            [
+                {"params": base_params, "lr": args.lr, "name": "base"},
+                {"params": [fusion_logits], "lr": args.lff_lr, "name": "lff"},
+            ],
+            weight_decay=5e-4,
+        )
+    logging.info(
+        "Initial learning rates: %s",
+        ", ".join(
+            "{}={:.8e}".format(group["name"], group["lr"])
+            for group in optimizer.param_groups
+        ),
+    )
     scheduler = lr_scheduler.CosineAnnealingLR(optimizer, args.epoch, eta_min=0, last_epoch=-1)
     train_model(
         model,
