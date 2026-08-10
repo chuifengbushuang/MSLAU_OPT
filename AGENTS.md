@@ -355,6 +355,16 @@ GitHub 远程仓库：`chuifengbushuang/MSLAU_OPT`。zsy 已配置 GitHub SSH �
 - 证据：`/data/models/zsy/mslau-net/runs/kvasir_p3_progressive_wavelet_c96_aux020_010_boundary010_b16_e200_seed1234_gpu0_nw8_20260810_0321`；best checkpoint为`checkpoints/best_iou_0.859276_epoch_126_0.092744.pth`；代码提交 `3869a0a`。
 - 结论：完整P3未刷新P0峰值，不补跑其他seed。渐进式decoder/选择性通道融合具有正信号，但当前乘性wavelet edge与reverse attention伤害小目标；下一次应做正式的“保留渐进式decoder与channel gate、去掉edge/reverse”训练，而不是继续叠加模块。
 
+### 2026-08-10：P3 去小波边缘门与反向注意力正式消融（运行中）
+
+- 假设：完整P3对小目标的退化主要来自wavelet edge与reverse attention乘性门控，而非渐进式decoder本身。
+- 具体操作：为P3增加两个显式且默认关闭兼容性不变的CLI消融开关；本次关闭wavelet edge gate与reverse attention，保留progressive decoder、multi-scale context、selective/channel gate、D2/D3辅助监督及boundary head。
+- 控制变量：Kvasir 880/120、seed1234、0.5 BCE+0.5 Dice、batch16、无Dropout、encoder LR5e-5、decoder LR2e-4、warmup5、200 epoch；与完整P3一致。
+- 验证：语法与CLI检查通过；随机batch2前向/反向确认edge/reverse参数无梯度而channel gate有梯度；旧完整P3 checkpoint 874项strict加载通过；真实数据1 epoch train/val完整通过，val IoU 0.702868。
+- 运行状态：正式训练已启动并跑过Epoch2，前三轮val IoU为0.5196/0.6700/0.7267；GPU0进程PID 2381529。
+- 证据：run目录 `/data/models/zsy/mslau-net/runs/kvasir_p3_progressive_noedge_noreverse_c96_aux020_010_boundary010_b16_e200_seed1234_gpu0_nw8_20260810_0426`；代码提交 `7f7b261`。
+- 结论：目前只能确认实现与训练链路正常；训练完成前不得报告正式提升或与P0作最终比较。
+
 ## 9. 后续每次追加记录的模板
 
 ```markdown
