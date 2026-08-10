@@ -424,7 +424,8 @@ GitHub 远程仓库：`chuifengbushuang/MSLAU_OPT`。zsy 已配置 GitHub SSH �
 - 验证：`py_compile`、CLI、随机batch2的352前向/五路监督/Lovasz反向通过；reverse correction梯度非零；P3 0.871511 checkpoint仍可strict加载。DINO教师保持eval且无梯度，四个adapter和学生encoder梯度非零。
 - 真实数据冒烟：8 train/4 val、batch4、1 epoch在GPU0完成，train/val IoU为0.1799/0.1802；P4 checkpoint可由测试脚本严格加载并推理。该数值仅验证完整链路，不作为实验效果。
 - 实验性质：这是冲击最高mIoU的组合实验，不是单变量消融。若有效，必须后续拆分 `P4 decoder`、`352`、`Lovasz`、`DINOv2` 才能归因。
-- 当前状态：正式880/120训练待启动；完成后补写best val mIoU、epoch、稳定性与run目录。
+- 正式运行：已在GPU0启动880/120、seed1234、batch8、num_workers8、200 epoch，PID `3649621`；run目录为 `/data/models/zsy/mslau-net/runs/kvasir_p4_cascade_reverse_352_lovasz_dinov2_vits14_dw010_c96_aux010_020_010_bnd010_b8_e200_seed1234_gpu0_nw8_20260810_080951`。
+- 启动验证：GPU0约占6.7GiB且利用率93%；Epoch0 train/val IoU为0.4340/0.6071，train DistillLoss0.8613，已进入Epoch1。完成后补写best val mIoU、epoch与稳定性，当前早期数值不作效果结论。
 
 ## 9. 后续每次追加记录的模板
 
