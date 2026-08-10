@@ -87,6 +87,32 @@ ps -u zsy -o pid,etime,cmd | grep -E 'python.*(train|kvasir)' | grep -v grep
 
 如重启 P2，优先研究“独立 coarse head + coarse 辅助监督 + refined head”，不要先继续调学习率。
 
+### P3 渐进式小波边界 Decoder
+
+P3 位于分支 `kvasir-p3-progressive-wavelet`，保留 legacy P0/P2/LFF，通过以下参数启用：
+
+```text
+--decoder_mode progressive_wavelet
+--progressive_channels 96
+--disable_edge_guidance
+--fusion_mode fixed
+```
+
+结构：Encoder 的 `64x64、32x32、16x16、8x8` 四层特征 → 多尺度 context →
+`8→16→32→64→128` 渐进式选择性融合 → final head → 上采样到256。
+两级固定 Haar 高频从反归一化 RGB 提取，并注入三个融合阶段；D3 coarse head 生成
+detach 的 reverse attention；D2、D3 和边界 head 接受辅助监督，final head 独立输出。
+
+当前 P3 损失：
+
+```text
+L = L_final + 0.2*L_D2 + 0.1*L_D3 + 0.1*L_boundary
+每个 L 使用 0.5*BCE + 0.5*Dice
+```
+
+P3 optimizer：encoder LR `5e-5`，decoder LR `2e-4`，5 epoch linear warmup 后 cosine；
+batch16、num_workers8、200 epoch、seed1234。legacy 模式默认训练语义保持不变。
+
 ### LFF 当前语义
 
 当前服务器代码中的 `--fusion_mode lff_scale` 已经是竞争式 softmax4，不再是最初的 `1 + delta`：
@@ -205,9 +231,9 @@ split：/home/zsy/projects/mslau-net/configs/splits/cvc_official_csv_fold0
 已知长期改动涉及：
 
 ```text
-kvasir_train.py          统一 BCE/Dice、最高 IoU 保存、seed、P0/P2、LFF、Dropout 参数
-kvasir_test.py           增加 P0/P2、fusion、Dropout 配置参数
-networks/mslau_net.py    P2 边缘引导、LFF、Dropout2d、softmax4 竞争权重
+kvasir_train.py          统一 Loss/保存/seed；P3 辅助损失、分组 LR、warmup+cosine
+kvasir_test.py           P0/P2/LFF/Dropout/P3 decoder 配置与 checkpoint 测试参数
+networks/mslau_net.py    P2、LFF、Dropout2d、softmax4、P3 渐进式小波 decoder
 make_cvc_splits.py       按 sequence_id 生成严格 CVC 划分
 loader.py                读取 images/masks 并二值化掩码
 ```
@@ -312,6 +338,17 @@ GitHub 远程仓库：`chuifengbushuang/MSLAU_OPT`。zsy 已配置 GitHub SSH �
 - 效果：最佳 val **0.891611**（Epoch87），CSV test **0.8746**，Dice0.9259；最后20轮 val 约0.88724，训练稳定。
 - 结论：划分协议使 val 比严格序列划分高0.1502，基本解释用户历史约0.90。下一对照应保持该 split，改为旧参数 batch8 + 纯 Dice。
 
+### 2026-08-10：Kvasir P3 渐进式小波边界 Decoder
+
+- 假设：P0 的四路特征过早对齐到64x64后累加，decoder 缺少逐级空间重建；LFF 只能缩放特征，不能修复该结构瓶颈。
+- 具体操作：新增可选 P3 decoder；逐级融合四层 encoder 特征；加入两级 Haar 高频、多阶段选择性门控、D3 reverse attention、D2/D3 辅助 head、独立边界 head 和 final head。
+- 控制变量：Kvasir 880/120、seed1234、0.5 BCE+0.5 Dice、无 Dropout、原 encoder 预训练、200 epoch；P3 batch16、encoder LR5e-5、decoder LR2e-4、warmup5。
+- 验证：`git diff --check`、`py_compile`、随机 batch2 前向/反向、旧0.860583 P0 checkpoint严格加载、真实880/120一轮训练及P3 checkpoint推理均通过。
+- 冒烟结果：真实数据1 epoch train IoU 0.5600、val IoU 0.6669；用于验证流程，不作为正式结果。
+- 正式运行：正在 GPU0 运行，PID 2042165；Epoch0 val IoU 0.5321，Epoch1 val IoU 0.6660，GPU约5982MiB且利用率约93%。
+- 证据：`/data/models/zsy/mslau-net/runs/kvasir_p3_progressive_wavelet_c96_aux020_010_boundary010_b16_e200_seed1234_gpu0_nw8_20260810_0321`；代码提交 `3869a0a`。
+- 结论：实现与训练链路已跑通；最终是否提升必须等待200 epoch结束后按最高 val IoU 与 P0 seed1234 0.860583比较。
+
 ## 9. 后续每次追加记录的模板
 
 ```markdown
@@ -328,9 +365,10 @@ GitHub 远程仓库：`chuifengbushuang/MSLAU_OPT`。zsy 已配置 GitHub SSH �
 
 ## 10. 下一步优先级
 
-1. **先补齐统计基线**：从 runs 汇总 Kvasir P0 seed42/1234/2026，报告均值±标准差。
-2. **复现 CVC 历史0.90**：官方 CSV/fold0、clean P0、batch8、纯 Dice、最高 IoU保存；只改变旧训练参数。
-3. **严格 CVC 提升**：新增完整模型 `--init_checkpoint`，从 Kvasir 0.860583 P0 初始化；先冻结 encoder，再以 encoder 1e-5、decoder 1e-4 微调；采用 sequence-level 五折。
-4. **P2**：独立 coarse head + auxiliary loss 后再实验。
-5. **LFF**：在未完成特征幅值统计和多 seed 前，不继续只调 LR/Dropout。
-6. 每次实验完成后更新本文件，并将重要代码状态提交到清晰命名的 Git 分支；不要让 checkpoint 与代码语义错配。
+1. **先完成 Kvasir P3**：等待 seed1234 正式运行结束；若 best val IoU 至少达到0.865，再补 seed42/2026并与 P0 三种子均值0.853004±0.010375比较。
+2. **P3 消融**：若完整 P3 有提升，依次关闭 boundary、auxiliary、reverse attention，确认真实贡献；若未提升，先分析各 auxiliary loss和门控尺度，不盲目加模块。
+3. **Kvasir 后续模型方向**：P3 验证后再考虑 DINOv2 特征蒸馏或 bottleneck Mamba；不要同时与 P3 首轮混合。
+4. **复现 CVC 历史0.90**：官方 CSV/fold0、clean P0、batch8、纯 Dice、最高 IoU保存；只改变旧训练参数。
+5. **严格 CVC 提升**：新增完整模型 `--init_checkpoint`，从 Kvasir 0.860583 P0 初始化；先冻结 encoder，再以 encoder 1e-5、decoder 1e-4 微调；采用 sequence-level 五折。
+6. **LFF**：停止只调 LR/Dropout；如重启，先完成特征幅值统计。
+7. 每次实验完成后更新本文件，并将重要代码状态提交到清晰命名的 Git 分支；不要让 checkpoint 与代码语义错配。
