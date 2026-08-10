@@ -199,8 +199,8 @@ split：/home/zsy/projects/mslau-net/configs/splits/cvc_official_csv_fold0
 
 | 模型 | 最佳 val mIoU | Epoch | 结论 |
 |---|---:|---:|---|
-| P3 reverse-only（无wavelet edge） | **0.871511** | 82 | 当前单seed最佳；待seed42/2026验证 |
-| 干净 P0 | 0.860583 | 84 | 当前可信主基线 |
+| P3 reverse-only（无wavelet edge） | **0.859864±0.010269**（best 0.871511） | 39/82/57 | 当前三seed最高均值；2/3 seed提升 |
+| 干净 P0 | 0.853004±0.010375（best 0.860583） | 100/84/51 | 历史可信主基线 |
 | P3 渐进式小波 decoder | 0.859276 | 126 | 低于同 seed P0 0.001307；后期更稳定但小目标退化 |
 | P3 去 wavelet edge/reverse | 0.856579 | 137 | 小目标恢复、后期最稳定，但最大目标明显退化 |
 | P0 + Dropout2d(0.1) | 0.855916 | 107 | 下降 |
@@ -391,14 +391,20 @@ GitHub 远程仓库：`chuifengbushuang/MSLAU_OPT`。zsy 已配置 GitHub SSH �
 - 证据：run目录 `/data/models/zsy/mslau-net/runs/kvasir_p3_progressive_reverse_only_noedge_c96_aux020_010_boundary010_b16_e200_seed1234_gpu0_nw8_20260810_0514`；best checkpoint为`checkpoints/best_iou_0.871511_epoch_82_0.091392.pth`。
 - 结论：正式训练支持“wavelet edge是完整P3的主要负贡献，reverse attention具有正贡献”。reverse-only成为当前单seed最佳模型，但在seed42/2026完成前不能替代P0作为稳定主结论，也不在验证集上继续调阈值。
 
-### 2026-08-10：P3 reverse-only seed42/2026补跑（运行中）
+### 2026-08-10：P3 reverse-only seed42/2026补跑与三seed结论
 
 - 目的：验证seed1234的0.871511是否可复现，并与P0三seed均值0.853004±0.010375公平比较。
 - 控制变量：除随机种子外，与reverse-only seed1234完全一致；Kvasir 880/120、batch16、0.5 BCE+0.5 Dice、encoder LR5e-5、decoder LR2e-4、warmup5、200 epoch、wavelet edge关闭、reverse attention开启。
-- 执行：seed42在GPU0，PID3040794；seed2026在GPU1，PID3040795；两任务各num_workers8并行运行。
-- 启动验证：两组均为880/120样本，预训练加载正常，wavelet_edge=False、reverse_attention=True；已完成Epoch2并进入Epoch3。seed42前三轮val IoU为0.5055/0.6857/0.7266，seed2026为0.4977/0.6832/0.7459；两卡显存各约6052 MiB，利用率84%/80%。
-- 证据：seed42 run目录 `/data/models/zsy/mslau-net/runs/kvasir_p3_progressive_reverse_only_noedge_c96_aux020_010_boundary010_b16_e200_seed42_gpu0_nw8_20260810_0643`；seed2026 run目录 `/data/models/zsy/mslau-net/runs/kvasir_p3_progressive_reverse_only_noedge_c96_aux020_010_boundary010_b16_e200_seed2026_gpu1_nw8_20260810_0643`。
-- 结论：当前仅确认并行训练链路正常；两组完成并做统一逐图/面积分组分析前不得更新多seed结论。
+- 执行：seed42在GPU0、seed2026在GPU1，各num_workers8并行运行；两组均为880/120样本，预训练与网络开关确认正确，训练期间两卡计算正常。
+- seed42结果：35m53s完成，best IoU **0.855969@39**，对应MainLoss0.093301；best MainLoss0.090549@22，对应IoU0.843605；最终train/val为0.9455/0.8424，最后20轮0.841360±0.000865。相对P0 seed42的0.841179提高0.014790。
+- seed2026结果：36m45s完成，best IoU **0.852112@57**，对应MainLoss0.106723；best MainLoss0.099889@20，对应IoU0.843325；最终train/val为0.9465/0.8408，最后20轮0.843145±0.001561。相对P0 seed2026的0.857249下降0.005137。
+- 三seed统计：reverse-only seed42/1234/2026为0.855969/0.871511/0.852112，均值 **0.859864±0.010269**；P0为0.841179/0.860583/0.857249，均值0.853004±0.010375。平均提高0.006860，配对差值为+0.014790/+0.010928/-0.005137，2/3 seed提升；跨seed标准差与P0几乎相同，不能宣称方差降低。
+- 指标机制：三seed reverse-only平均Precision约0.933990、Recall约0.912873；P0约0.920165/0.918941。平均收益主要来自减少假阳性，但以约0.0061 Recall为代价。seed2026的Precision0.933935、Recall0.902603，相对P0的0.918695/0.928629，说明该seed失败来自明显欠分割。
+- 逐图配对：seed42相对P0胜74、负45，中位差+0.005319；seed1234胜72、负48，中位差+0.003500；seed2026虽均值下降，仍胜65、负55且中位差+0.002078，说明少量严重退步样本拉低seed2026均值。
+- 三seed面积组均值：最小到最大组reverse-only为0.797977/0.884796/0.899863/0.856820，P0为0.793642/0.881120/0.885840/0.851375，对应平均提升+0.004335/+0.003676/+0.014022/+0.005445。只有第三面积组在三个seed中均提升；其余组的正收益存在seed依赖。
+- 参数稳定性：reverse scale的fuse2在seed42/1234/2026为0.1731/0.1730/0.1669，fuse1为0.1054/0.0814/0.0988，没有异常发散；seed2026的Recall问题更可能来自coarse/reverse空间图分布而不是标量scale。
+- 证据：seed42 run目录 `/data/models/zsy/mslau-net/runs/kvasir_p3_progressive_reverse_only_noedge_c96_aux020_010_boundary010_b16_e200_seed42_gpu0_nw8_20260810_0643`，best checkpoint为`checkpoints/best_iou_0.855969_epoch_39_0.093301.pth`；seed2026 run目录 `/data/models/zsy/mslau-net/runs/kvasir_p3_progressive_reverse_only_noedge_c96_aux020_010_boundary010_b16_e200_seed2026_gpu1_nw8_20260810_0643`，best checkpoint为`checkpoints/best_iou_0.852112_epoch_57_0.106723.pth`。
+- 结论：reverse-only是当前三seed均值最高的实验结构，满足“均值更高且至少2个seed提升”的预设判据，可升级为当前主模型候选；但n=3、一个seed下降且均值提升大于中位数提升，证据强度仍属中等，P0继续作为历史基线。
 
 ## 9. 后续每次追加记录的模板
 
@@ -416,11 +422,11 @@ GitHub 远程仓库：`chuifengbushuang/MSLAU_OPT`。zsy 已配置 GitHub SSH �
 
 ## 10. 下一步优先级
 
-1. **补跑reverse-only seed42/2026**：代码与超参数完全不变，得到三seed均值±标准差，并与P0三seed的0.853004±0.010375比较；完成前不再改网络。
-2. **多seed判定**：若reverse-only三seed均值明确超过P0且至少两个seed提升，将其升级为新主模型；若提升仅来自seed1234，保留为有希望但不稳定的结果。
-3. **尺寸组复核**：每个新seed继续报告四个GT面积组，重点确认最小组提升和第二/第四组轻微退化是否可复现。
-4. **多seed之后再改模型**：若reverse-only稳定有效，再研究零中心reverse残差门或EMA/SWA；若不稳定，优先训练期门控衰减，不继续穷举edge组合。
-5. **Kvasir后续大改方向**：P3多seed结论确定后再考虑DINOv2特征蒸馏或bottleneck Mamba；不要与门控实验混合。
+1. **锁定reverse-only主候选**：保留当前代码、超参数和三个checkpoint，不再恢复wavelet edge；后续模型实验以P0历史基线和reverse-only三seed均值同时作对照。
+2. **先诊断seed2026欠分割**：统计三seed coarse logits、reverse map和预测面积比，定位Recall波动来源；在诊断前不直接调reverse scale。
+3. **下一模型单变量**：若要提高稳定性，优先研究零中心reverse残差门或对reverse map做有界归一化，一次只实现一种；目标是保留Precision增益同时恢复Recall。
+4. **更强证据**：论文级结论建议再加2个预注册seed或建立独立test；当前n=3均值提升0.006860但配对结果含1次下降，不做显著性夸大。
+5. **Kvasir大改方向**：reverse机制稳定后再考虑DINOv2特征蒸馏或bottleneck Mamba；不要混合到首个稳定性实验。
 6. **复现 CVC 历史0.90**：官方CSV/fold0、clean P0、batch8、纯Dice、最高IoU保存；只改变旧训练参数。
 7. **严格 CVC 提升**：新增完整模型`--init_checkpoint`，从Kvasir 0.860583 P0初始化；先冻结encoder，再以encoder 1e-5、decoder 1e-4微调；采用sequence-level五折。
 8. **LFF**：停止只调LR/Dropout；如重启，先完成特征幅值统计。
