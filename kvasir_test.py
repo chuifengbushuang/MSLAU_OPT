@@ -41,10 +41,10 @@ def load_ids(txt_path):
     return [sample_id if os.path.splitext(sample_id)[1] else f"{sample_id}.jpg" for sample_id in ids]
 
 
-def get_transform():
+def get_transform(img_size=256):
     return A.Compose(
         [
-            A.Resize(256, 256),
+            A.Resize(img_size, img_size),
             A.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
             ToTensorV2(),
         ]
@@ -115,6 +115,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--batch", default=8, type=int, help="batch size")
     parser.add_argument("--num_workers", default=0, type=int, help="dataloader workers")
+    parser.add_argument("--img_size", default=256, type=int, help="square input size")
     parser.add_argument("--threshold", default=0.5, type=float, help="binarization threshold")
     parser.add_argument("--debug", default=False, type=str2bool, help="save predicted masks")
     parser.add_argument("--debug_dir", default="debug_kvasir", type=str, help="debug output directory")
@@ -130,7 +131,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--decoder_mode",
         default="legacy",
-        choices=["legacy", "progressive_wavelet"],
+        choices=["legacy", "progressive_wavelet", "cascade_reverse"],
         help="decoder architecture used by the checkpoint",
     )
     parser.add_argument("--progressive_channels", default=96, type=int,
@@ -157,7 +158,8 @@ if __name__ == "__main__":
     print(f"Using checkpoint: {model_path}")
     print(f"Testing samples: {len(eval_files)}")
 
-    eval_dataset = binary_class(dataset_path, eval_files, get_transform())
+    eval_dataset = binary_class(
+        dataset_path, eval_files, get_transform(args.img_size))
     eval_loader = DataLoader(
         dataset=eval_dataset,
         batch_size=args.batch,
@@ -169,7 +171,7 @@ if __name__ == "__main__":
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = MSLAU_net(
-        img_size=256,
+        img_size=args.img_size,
         mla_channels=64,
         in_chans=3,
         num_classes=1,

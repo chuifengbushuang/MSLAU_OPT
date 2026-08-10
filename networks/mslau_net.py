@@ -549,6 +549,130 @@ class ProgressiveWaveletDecoder(nn.Module):
                 self.boundary_head(d1), output_size),
         }
 
+
+class SelectiveFusionBlock(nn.Module):
+    """Fuse an encoder skip with the preceding decoder feature."""
+
+    def __init__(self, skip_channels, channels):
+        super().__init__()
+        self.skip_project = ConvNormAct(
+            skip_channels, channels, kernel_size=1, padding=0)
+        self.decoder_project = ConvNormAct(
+            channels, channels, kernel_size=1, padding=0)
+        hidden_channels = max(16, channels // 4)
+        self.selective_gate = nn.Sequential(
+            nn.Conv2d(2 * channels, channels, 1, bias=False),
+            nn.BatchNorm2d(channels),
+            nn.GELU(),
+            nn.Conv2d(channels, channels, 1),
+            nn.Sigmoid(),
+        )
+        self.channel_gate = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Conv2d(channels, hidden_channels, 1),
+            nn.GELU(),
+            nn.Conv2d(hidden_channels, channels, 1),
+            nn.Sigmoid(),
+        )
+        self.channel_scale = nn.Parameter(torch.tensor(0.1))
+        self.refine = ResidualRefineBlock(channels)
+
+    def forward(self, skip, decoder):
+        decoder = F.interpolate(
+            decoder, size=skip.shape[-2:], mode="bilinear", align_corners=False)
+        decoder = self.decoder_project(decoder)
+        skip = self.skip_project(skip)
+        gate = self.selective_gate(torch.cat([skip, decoder], dim=1))
+        fused = decoder + gate * skip
+        fused = fused * (1.0 + self.channel_scale * self.channel_gate(fused))
+        return self.refine(fused)
+
+
+class ReverseResidualCorrection(nn.Module):
+    """Correct uncertain foreground regions while retaining an identity path."""
+
+    def __init__(self, channels, initial_scale=0.1, temperature=1.0):
+        super().__init__()
+        self.temperature = temperature
+        self.scale = nn.Parameter(torch.tensor(float(initial_scale)))
+        self.correction = nn.Sequential(
+            ConvNormAct(channels, channels),
+            nn.Conv2d(channels, channels, 3, padding=1, bias=True),
+        )
+        nn.init.zeros_(self.correction[-1].weight)
+        nn.init.zeros_(self.correction[-1].bias)
+
+    def forward(self, features, previous_logits):
+        reverse = 1.0 - torch.sigmoid(
+            previous_logits.detach() / self.temperature)
+        reverse = F.interpolate(
+            reverse, size=features.shape[-2:], mode="bilinear", align_corners=False)
+        return features + self.scale * reverse * self.correction(features)
+
+
+class CascadeReverseDecoder(nn.Module):
+    """P4 coarse-to-fine decoder with stage-local reverse residual correction."""
+
+    def __init__(self, encoder_channels=(64, 128, 256, 512), channels=96,
+                 num_classes=1, dropout=0.0):
+        super().__init__()
+        self.context = MultiScaleContextBlock(encoder_channels[3], channels)
+        self.fuse3 = SelectiveFusionBlock(encoder_channels[2], channels)
+        self.fuse2 = SelectiveFusionBlock(encoder_channels[1], channels)
+        self.fuse1 = SelectiveFusionBlock(encoder_channels[0], channels)
+        self.aux_d3_head = nn.Conv2d(channels, num_classes, 1)
+        self.aux_d2_head = nn.Conv2d(channels, num_classes, 1)
+        self.aux_d1_head = nn.Conv2d(channels, num_classes, 1)
+        self.reverse_d2 = ReverseResidualCorrection(channels)
+        self.reverse_d1 = ReverseResidualCorrection(channels)
+        self.reverse_final = ReverseResidualCorrection(channels)
+        self.boundary_head = nn.Sequential(
+            ConvNormAct(channels, channels // 2),
+            nn.Conv2d(channels // 2, num_classes, 1),
+        )
+        self.final_refine = ResidualRefineBlock(channels)
+        self.dropout = nn.Dropout2d(dropout)
+        self.final_head = nn.Conv2d(channels, num_classes, 3, padding=1)
+
+    @staticmethod
+    def resize_logits(logits, output_size):
+        return F.interpolate(
+            logits, size=(output_size, output_size),
+            mode="bilinear", align_corners=False)
+
+    def forward(self, encoder_features, output_size, return_aux=False):
+        e1, e2, e3, e4 = encoder_features
+        d4 = self.context(e4)
+
+        d3 = self.fuse3(e3, d4)
+        logits_d3 = self.aux_d3_head(d3)
+
+        d2 = self.fuse2(e2, d3)
+        d2 = self.reverse_d2(d2, logits_d3)
+        logits_d2 = self.aux_d2_head(d2)
+
+        d1 = self.fuse1(e1, d2)
+        d1 = self.reverse_d1(d1, logits_d2)
+        logits_d1 = self.aux_d1_head(d1)
+
+        final_features = F.interpolate(
+            d1, scale_factor=2, mode="bilinear", align_corners=False)
+        final_features = self.reverse_final(final_features, logits_d1)
+        final_features = self.final_refine(final_features)
+        logits = self.final_head(self.dropout(final_features))
+        logits = self.resize_logits(logits, output_size)
+
+        if not return_aux:
+            return logits
+        return {
+            "logits": logits,
+            "aux_d1": self.resize_logits(logits_d1, output_size),
+            "aux_d2": self.resize_logits(logits_d2, output_size),
+            "aux_d3": self.resize_logits(logits_d3, output_size),
+            "boundary_logits": self.resize_logits(
+                self.boundary_head(d1), output_size),
+        }
+
 class MSLAU_net(nn.Module):
 
     def __init__(self, img_size=224, mla_channels=64,in_chans=3, num_classes=1,
@@ -556,10 +680,10 @@ class MSLAU_net(nn.Module):
                  decoder_mode="legacy", progressive_channels=96,
                  p3_use_wavelet_edges=True, p3_use_reverse_attention=True):
         super(MSLAU_net, self).__init__()
-        if decoder_mode not in {"legacy", "progressive_wavelet"}:
+        if decoder_mode not in {"legacy", "progressive_wavelet", "cascade_reverse"}:
             raise ValueError("Unsupported decoder mode: {}".format(decoder_mode))
-        if decoder_mode == "progressive_wavelet" and fusion_mode != "fixed":
-            raise ValueError("Progressive wavelet decoder requires fusion_mode='fixed'")
+        if decoder_mode != "legacy" and fusion_mode != "fixed":
+            raise ValueError("Progressive decoders require fusion_mode='fixed'")
         self.img_size = img_size
         self.norm_cfg = None
         self.mla_channels = mla_channels
@@ -588,28 +712,48 @@ class MSLAU_net(nn.Module):
             self.mlahead = None
             self.edge_guidance = None
             self.seg = None
-            self.progressive_decoder = ProgressiveWaveletDecoder(
-                encoder_channels=(64, 128, 256, 512),
-                channels=progressive_channels,
-                num_classes=num_classes,
-                dropout=decoder_dropout,
-                use_wavelet_edges=p3_use_wavelet_edges,
-                use_reverse_attention=p3_use_reverse_attention,
-            )
+            if decoder_mode == "progressive_wavelet":
+                self.progressive_decoder = ProgressiveWaveletDecoder(
+                    encoder_channels=(64, 128, 256, 512),
+                    channels=progressive_channels,
+                    num_classes=num_classes,
+                    dropout=decoder_dropout,
+                    use_wavelet_edges=p3_use_wavelet_edges,
+                    use_reverse_attention=p3_use_reverse_attention,
+                )
+            else:
+                self.progressive_decoder = CascadeReverseDecoder(
+                    encoder_channels=(64, 128, 256, 512),
+                    channels=progressive_channels,
+                    num_classes=num_classes,
+                    dropout=decoder_dropout,
+                )
 
-    def forward(self, inputs, return_aux=False):
+    def forward(self, inputs, return_aux=False, return_features=False):
         edge_inputs = inputs
         if inputs.size()[1] == 1:
             inputs = inputs.repeat(1, 3, 1, 1)
         encoder_features = self.encoder(inputs)
 
-        if self.decoder_mode == "progressive_wavelet":
-            return self.progressive_decoder(
-                encoder_features,
-                normalized_image=edge_inputs,
-                output_size=self.img_size,
-                return_aux=return_aux,
-            )
+        if self.decoder_mode != "legacy":
+            if self.decoder_mode == "progressive_wavelet":
+                outputs = self.progressive_decoder(
+                    encoder_features,
+                    normalized_image=edge_inputs,
+                    output_size=self.img_size,
+                    return_aux=return_aux,
+                )
+            else:
+                outputs = self.progressive_decoder(
+                    encoder_features,
+                    output_size=self.img_size,
+                    return_aux=return_aux,
+                )
+            if return_features:
+                if not isinstance(outputs, dict):
+                    outputs = {"logits": outputs}
+                outputs["encoder_features"] = encoder_features
+            return outputs
 
         conv_mla_features = self.conv_mla(encoder_features)
 
@@ -627,6 +771,8 @@ class MSLAU_net(nn.Module):
             logits = coarse_logits
         logits = F.interpolate(logits, size=self.img_size, mode='bilinear',
                                align_corners=True)
+        if return_features:
+            return {"logits": logits, "encoder_features": encoder_features}
         return logits
     
     def load_from(self, pretrained_path=None):

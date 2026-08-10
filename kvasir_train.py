@@ -20,7 +20,12 @@ from torch.optim import lr_scheduler
 from torch.utils.data import DataLoader
 
 from loader import binary_class
-from loss import BCEDiceLoss_binary, DiceLoss_binary, IoU_binary
+from loss import (
+    BCEDiceLoss_binary,
+    BCEDiceLovaszLoss_binary,
+    DiceLoss_binary,
+    IoU_binary,
+)
 from networks.mslau_net import MSLAU_net
 
 if platform.system() != "Windows":
@@ -50,10 +55,10 @@ def load_ids(txt_path):
     return [sample_id if os.path.splitext(sample_id)[1] else f"{sample_id}.jpg" for sample_id in ids]
 
 
-def get_train_transform():
+def get_train_transform(img_size=256):
     return A.Compose(
         [
-            A.Resize(256, 256),
+            A.Resize(img_size, img_size),
             A.HorizontalFlip(p=0.25),
             A.VerticalFlip(p=0.25),
             A.ShiftScaleRotate(shift_limit=0, p=0.25),
@@ -64,10 +69,10 @@ def get_train_transform():
     )
 
 
-def get_valid_transform():
+def get_valid_transform(img_size=256):
     return A.Compose(
         [
-            A.Resize(256, 256),
+            A.Resize(img_size, img_size),
             A.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
             ToTensorV2(),
         ]
@@ -140,9 +145,79 @@ def make_boundary_target(labels):
     return (dilated - eroded).clamp(0.0, 1.0)
 
 
+class DINOv2FeatureDistiller(nn.Module):
+    """Training-only multi-level feature distillation from frozen DINOv2."""
+
+    def __init__(self, teacher_name="vit_small_patch14_dinov2",
+                 student_channels=(64, 128, 256, 512), input_size=364,
+                 checkpoint=None):
+        super().__init__()
+        import timm
+
+        self.teacher_name = teacher_name
+        self.input_size = input_size
+        self.layer_indices = (2, 5, 8, 11)
+        self.teacher = timm.create_model(
+            teacher_name,
+            pretrained=checkpoint is None,
+            dynamic_img_size=True,
+        )
+        if checkpoint is not None:
+            teacher_state = torch.load(
+                checkpoint, map_location="cpu", weights_only=False)
+            teacher_state.pop("mask_token", None)
+            self.teacher.load_state_dict(teacher_state, strict=True)
+        self.teacher.requires_grad_(False)
+        self.teacher.eval()
+        teacher_channels = self.teacher.embed_dim
+        self.adapters = nn.ModuleList([
+            nn.Conv2d(channels, teacher_channels, kernel_size=1)
+            for channels in student_channels
+        ])
+
+    def train(self, mode=True):
+        super().train(mode)
+        self.teacher.eval()
+        return self
+
+    def adapter_parameters(self):
+        return self.adapters.parameters()
+
+    def forward(self, normalized_images, student_features):
+        teacher_inputs = F.interpolate(
+            normalized_images,
+            size=(self.input_size, self.input_size),
+            mode="bilinear",
+            align_corners=False,
+        )
+        with torch.no_grad():
+            teacher_features = self.teacher.get_intermediate_layers(
+                teacher_inputs,
+                n=self.layer_indices,
+                reshape=True,
+                norm=True,
+            )
+
+        losses = []
+        for adapter, student_feature, teacher_feature in zip(
+                self.adapters, student_features, teacher_features):
+            student_feature = adapter(student_feature)
+            student_feature = F.interpolate(
+                student_feature,
+                size=teacher_feature.shape[-2:],
+                mode="bilinear",
+                align_corners=False,
+            )
+            student_feature = F.normalize(student_feature, dim=1)
+            teacher_feature = F.normalize(teacher_feature.detach(), dim=1)
+            losses.append(1.0 - (student_feature * teacher_feature).sum(dim=1).mean())
+        return torch.stack(losses).mean()
+
+
 def train_model(model, criterion, optimizer, scheduler, dataloaders, metric,
-                num_epochs, save_dir, aux_d2_weight=0.2,
-                aux_d3_weight=0.1, boundary_weight=0.1):
+                num_epochs, save_dir, aux_criterion=None, aux_d1_weight=0.0,
+                aux_d2_weight=0.2, aux_d3_weight=0.1, boundary_weight=0.1,
+                distiller=None, distill_weight=0.0):
     since = time.time()
     best_loss = float("inf")
     best_loss_epoch = 0
@@ -161,12 +236,15 @@ def train_model(model, criterion, optimizer, scheduler, dataloaders, metric,
         for phase in ["train", "valid"]:
             if phase == "train":
                 model.train(True)
+                if distiller is not None:
+                    distiller.train(True)
             else:
                 model.eval()
 
             running_loss = 0.0
             running_main_loss = 0.0
             running_iou = 0.0
+            running_distill_loss = 0.0
             running_samples = 0
 
             for inputs, labels, _ in dataloaders[phase]:
@@ -184,19 +262,28 @@ def train_model(model, criterion, optimizer, scheduler, dataloaders, metric,
                 with torch.set_grad_enabled(phase == "train"):
                     model_outputs = model(
                         inputs,
-                        return_aux=model.decoder_mode == "progressive_wavelet",
+                        return_aux=model.decoder_mode != "legacy",
+                        return_features=distiller is not None and phase == "train",
                     )
                     if isinstance(model_outputs, dict):
                         outputs = model_outputs["logits"]
                         main_loss = criterion(outputs, labels)
-                        aux_d2_loss = criterion(model_outputs["aux_d2"], labels)
-                        aux_d3_loss = criterion(model_outputs["aux_d3"], labels)
-                        boundary_loss = criterion(
+                        supervision_criterion = aux_criterion or criterion
+                        aux_d1_loss = (
+                            supervision_criterion(model_outputs["aux_d1"], labels)
+                            if "aux_d1" in model_outputs else outputs.new_zeros(())
+                        )
+                        aux_d2_loss = supervision_criterion(
+                            model_outputs["aux_d2"], labels)
+                        aux_d3_loss = supervision_criterion(
+                            model_outputs["aux_d3"], labels)
+                        boundary_loss = supervision_criterion(
                             model_outputs["boundary_logits"],
                             make_boundary_target(labels),
                         )
                         loss = (
                             main_loss
+                            + aux_d1_weight * aux_d1_loss
                             + aux_d2_weight * aux_d2_loss
                             + aux_d3_weight * aux_d3_loss
                             + boundary_weight * boundary_loss
@@ -205,6 +292,11 @@ def train_model(model, criterion, optimizer, scheduler, dataloaders, metric,
                         outputs = model_outputs
                         main_loss = criterion(outputs, labels)
                         loss = main_loss
+                    distill_loss = outputs.new_zeros(())
+                    if distiller is not None and phase == "train":
+                        distill_loss = distiller(
+                            inputs, model_outputs["encoder_features"])
+                        loss = loss + distill_weight * distill_loss
                     score = metric(outputs, labels)
 
                     if phase == "train":
@@ -215,15 +307,18 @@ def train_model(model, criterion, optimizer, scheduler, dataloaders, metric,
                 running_loss += loss.item() * batch_samples
                 running_main_loss += main_loss.item() * batch_samples
                 running_iou += score.item() * batch_samples
+                running_distill_loss += distill_loss.item() * batch_samples
                 running_samples += batch_samples
 
             epoch_loss = running_loss / running_samples
             epoch_main_loss = running_main_loss / running_samples
             epoch_acc = running_iou / running_samples
+            epoch_distill_loss = running_distill_loss / running_samples
 
             logging.info(
-                "{} Loss: {:.4f} MainLoss: {:.4f} IoU: {:.4f}".format(
-                    phase, epoch_loss, epoch_main_loss, epoch_acc))
+                "{} Loss: {:.4f} MainLoss: {:.4f} DistillLoss: {:.4f} IoU: {:.4f}".format(
+                    phase, epoch_loss, epoch_main_loss,
+                    epoch_distill_loss, epoch_acc))
 
             loss_list[phase].append(epoch_main_loss)
             accuracy_list[phase].append(epoch_acc)
@@ -291,9 +386,16 @@ if __name__ == "__main__":
     parser.add_argument("--output_dir", type=str, default="save_models/kvasir", help="checkpoint directory")
     parser.add_argument("--log_dir", type=str, default="logs/kvasir", help="log directory")
     parser.add_argument("--num_workers", type=int, default=8, help="dataloader workers")
-    parser.add_argument("--loss", default="bce_dice", choices=["ce", "dice", "bce_dice"], help="loss type")
+    parser.add_argument("--img_size", type=int, default=256, help="square input size")
+    parser.add_argument(
+        "--loss", default="bce_dice",
+        choices=["ce", "dice", "bce_dice", "bce_dice_lovasz"],
+        help="final-mask loss type",
+    )
     parser.add_argument("--bce_weight", type=float, default=0.5, help="BCE weight in bce_dice loss")
     parser.add_argument("--dice_weight", type=float, default=0.5, help="Dice weight in bce_dice loss")
+    parser.add_argument("--lovasz_weight", type=float, default=0.3,
+                        help="Lovasz weight in bce_dice_lovasz loss")
     parser.add_argument("--batch", type=int, default=32, help="batch size")
     parser.add_argument("--lr", type=float, default=1e-4, help="learning rate")
     parser.add_argument(
@@ -306,8 +408,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--decoder_mode",
         default="legacy",
-        choices=["legacy", "progressive_wavelet"],
-        help="legacy MLA decoder or P3 progressive wavelet decoder",
+        choices=["legacy", "progressive_wavelet", "cascade_reverse"],
+        help="legacy, P3 progressive, or P4 cascade reverse decoder",
     )
     parser.add_argument("--progressive_channels", type=int, default=96,
                         help="feature channels in the P3 progressive decoder")
@@ -317,6 +419,8 @@ if __name__ == "__main__":
                         help="disable the P3 reverse-attention multiplication gate")
     parser.add_argument("--aux_d2_weight", type=float, default=0.2,
                         help="P3 D2 auxiliary segmentation loss weight")
+    parser.add_argument("--aux_d1_weight", type=float, default=0.1,
+                        help="P4 D1 auxiliary segmentation loss weight")
     parser.add_argument("--aux_d3_weight", type=float, default=0.1,
                         help="P3 coarse D3 segmentation loss weight")
     parser.add_argument("--boundary_weight", type=float, default=0.1,
@@ -327,6 +431,19 @@ if __name__ == "__main__":
                         help="P3 decoder learning rate")
     parser.add_argument("--warmup_epochs", type=int, default=0,
                         help="linear warmup epochs before cosine decay")
+    parser.add_argument(
+        "--distill_teacher", default="none",
+        choices=["none", "vit_small_patch14_dinov2"],
+        help="training-only frozen feature teacher",
+    )
+    parser.add_argument("--distill_weight", type=float, default=0.0,
+                        help="DINOv2 feature-distillation loss weight")
+    parser.add_argument("--dino_input_size", type=int, default=364,
+                        help="DINOv2 teacher input size; must be divisible by 14")
+    parser.add_argument(
+        "--dino_checkpoint", type=str, default=None,
+        help="local DINOv2 teacher checkpoint (avoids runtime download)",
+    )
     parser.add_argument("--epoch", type=int, default=200, help="epochs")
     parser.add_argument("--seed", type=int, default=1234, help="random seed")
     parser.add_argument(
@@ -368,8 +485,10 @@ if __name__ == "__main__":
     print(f"Training samples: {len(train_files)}")
     print(f"Validation samples: {len(val_files)}")
 
-    train_dataset = binary_class(dataset_path, train_files, get_train_transform())
-    val_dataset = binary_class(dataset_path, val_files, get_valid_transform())
+    train_dataset = binary_class(
+        dataset_path, train_files, get_train_transform(args.img_size))
+    val_dataset = binary_class(
+        dataset_path, val_files, get_valid_transform(args.img_size))
 
     train_loader = DataLoader(
         dataset=train_dataset,
@@ -390,7 +509,7 @@ if __name__ == "__main__":
     dataloaders = {"train": train_loader, "valid": val_loader}
 
     model = MSLAU_net(
-        img_size=256,
+        img_size=args.img_size,
         mla_channels=64,
         in_chans=3,
         num_classes=1,
@@ -406,6 +525,7 @@ if __name__ == "__main__":
     logging.info("Edge guidance enabled: %s", model.edge_guidance_enabled)
     logging.info("Fusion mode: %s", model.fusion_mode)
     logging.info("Decoder Dropout2d: %.3f", model.decoder_dropout.p)
+    logging.info("Input size: %d", args.img_size)
     if model.decoder_mode == "progressive_wavelet":
         logging.info(
             "P3 configuration: channels=%d aux_d2=%.3f aux_d3=%.3f "
@@ -414,6 +534,13 @@ if __name__ == "__main__":
             args.aux_d3_weight, args.boundary_weight,
             not args.disable_p3_wavelet_edge,
             not args.disable_p3_reverse_attention,
+        )
+    elif model.decoder_mode == "cascade_reverse":
+        logging.info(
+            "P4 configuration: channels=%d aux_d1=%.3f aux_d2=%.3f "
+            "aux_d3=%.3f boundary=%.3f",
+            args.progressive_channels, args.aux_d1_weight,
+            args.aux_d2_weight, args.aux_d3_weight, args.boundary_weight,
         )
     load_encoder_pretrained(model, args.pretrained)
     if torch.cuda.is_available():
@@ -428,21 +555,61 @@ if __name__ == "__main__":
             bce_weight=args.bce_weight,
             dice_weight=args.dice_weight,
         )
+    elif args.loss == "bce_dice_lovasz":
+        criterion = BCEDiceLovaszLoss_binary(
+            bce_weight=args.bce_weight,
+            dice_weight=args.dice_weight,
+            lovasz_weight=args.lovasz_weight,
+        )
     else:
         raise ValueError(f"Unsupported loss type: {args.loss}")
 
+    aux_criterion = BCEDiceLoss_binary(bce_weight=0.5, dice_weight=0.5)
     metric = IoU_binary()
+    distiller = None
+    if args.distill_teacher != "none":
+        if model.decoder_mode != "cascade_reverse":
+            raise ValueError("DINOv2 distillation is currently supported for P4 only")
+        if args.distill_weight <= 0:
+            raise ValueError("distill_weight must be positive when a teacher is enabled")
+        if args.dino_input_size % 14 != 0:
+            raise ValueError("dino_input_size must be divisible by DINOv2 patch size 14")
+        logging.info(
+            "Loading frozen distillation teacher: %s input=%d weight=%.4f checkpoint=%s",
+            args.distill_teacher, args.dino_input_size, args.distill_weight,
+            args.dino_checkpoint,
+        )
+        dino_checkpoint = (
+            resolve_path(args.dino_checkpoint) if args.dino_checkpoint else None)
+        if dino_checkpoint is not None and not os.path.exists(dino_checkpoint):
+            raise FileNotFoundError(
+                "DINOv2 checkpoint not found: {}".format(dino_checkpoint))
+        distiller = DINOv2FeatureDistiller(
+            teacher_name=args.distill_teacher,
+            input_size=args.dino_input_size,
+            checkpoint=dino_checkpoint,
+        )
+        if torch.cuda.is_available():
+            distiller = distiller.cuda()
     fusion_logits = getattr(model.conv_mla, "fusion_logits", None)
-    if model.decoder_mode == "progressive_wavelet":
+    if model.decoder_mode != "legacy":
         decoder_params = [
             param for name, param in model.named_parameters()
             if not name.startswith("encoder.")
         ]
+        parameter_groups = [
+            {"params": model.encoder.parameters(), "lr": args.encoder_lr, "name": "encoder"},
+            {"params": decoder_params, "lr": args.decoder_lr,
+             "name": "{}_decoder".format(model.decoder_mode)},
+        ]
+        if distiller is not None:
+            parameter_groups.append({
+                "params": distiller.adapter_parameters(),
+                "lr": args.decoder_lr,
+                "name": "distill_adapters",
+            })
         optimizer = optim.AdamW(
-            [
-                {"params": model.encoder.parameters(), "lr": args.encoder_lr, "name": "encoder"},
-                {"params": decoder_params, "lr": args.decoder_lr, "name": "p3_decoder"},
-            ],
+            parameter_groups,
             weight_decay=5e-4,
         )
     elif fusion_logits is None:
@@ -494,7 +661,12 @@ if __name__ == "__main__":
         metric,
         num_epochs=args.epoch,
         save_dir=output_dir,
+        aux_criterion=aux_criterion,
+        aux_d1_weight=(
+            args.aux_d1_weight if model.decoder_mode == "cascade_reverse" else 0.0),
         aux_d2_weight=args.aux_d2_weight,
         aux_d3_weight=args.aux_d3_weight,
         boundary_weight=args.boundary_weight,
+        distiller=distiller,
+        distill_weight=args.distill_weight,
     )

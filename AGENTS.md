@@ -406,6 +406,26 @@ GitHub 远程仓库：`chuifengbushuang/MSLAU_OPT`。zsy 已配置 GitHub SSH �
 - 证据：seed42 run目录 `/data/models/zsy/mslau-net/runs/kvasir_p3_progressive_reverse_only_noedge_c96_aux020_010_boundary010_b16_e200_seed42_gpu0_nw8_20260810_0643`，best checkpoint为`checkpoints/best_iou_0.855969_epoch_39_0.093301.pth`；seed2026 run目录 `/data/models/zsy/mslau-net/runs/kvasir_p3_progressive_reverse_only_noedge_c96_aux020_010_boundary010_b16_e200_seed2026_gpu1_nw8_20260810_0643`，best checkpoint为`checkpoints/best_iou_0.852112_epoch_57_0.106723.pth`。
 - 结论：reverse-only是当前三seed均值最高的实验结构，满足“均值更高且至少2个seed提升”的预设判据，可升级为当前主模型候选；但n=3、一个seed下降且均值提升大于中位数提升，证据强度仍属中等，P0继续作为历史基线。
 
+### 2026-08-10：P3 reverse-only 版本发布
+
+- 操作：将达到单 seed 最高 **0.871511** 的精确代码状态固定为 GitHub 分支 `kvasir-p3-reverse-only-0871`，并增加 annotated tag `kvasir-p3-reverse-only-0.871511`。
+- 代码状态：commit `791560e`；P3 保持 `progressive_wavelet` decoder、关闭 wavelet edge、保留 reverse attention。
+- checkpoint：`/data/models/zsy/mslau-net/runs/kvasir_p3_progressive_reverse_only_noedge_c96_aux020_010_boundary010_b16_e200_seed1234_gpu0_nw8_20260810_0514/checkpoints/best_iou_0.871511_epoch_82_0.091392.pth`。
+- 结论：P3 的代码、标签和最高 checkpoint 已形成可复现闭环；P4 在新分支开发，不覆盖 P3。
+
+### 2026-08-10：P4 cascade reverse + 352 + final Lovasz + DINOv2 蒸馏
+
+- 假设：P3 将同一 coarse reverse map 复用于后续层，可能造成局部纠错不足和欠分割；逐级生成 D3/D2/D1 预测并只引导下一层，可以保留反向注意力的 Precision 收益，同时提高空间纠错能力。352 输入改善小息肉细节；final Lovasz直接优化IoU代理；DINOv2多层特征蒸馏增强小数据集表征。
+- 具体操作：在独立分支 `kvasir-p4-cascade-ra-352-dino-lovasz` 新增 `cascade_reverse` decoder；D3→D2、D2→D1、D1→final 使用 `1-sigmoid(detached logits)` 的逐级 reverse residual correction。纠错卷积末层零初始化，保留 identity 起点；不使用 wavelet edge。
+- 监督：final 使用 0.35 BCE + 0.35 Dice + 0.30 Lovasz；D1/D2/D3/boundary 仍使用 0.5 BCE + 0.5 Dice，权重分别0.1/0.2/0.1/0.1。
+- 蒸馏：冻结 `vit_small_patch14_dinov2`，取 block 2/5/8/11 的384通道特征；四级学生特征用1×1 adapter投影后做平均 cosine loss，权重0.1。教师只在训练出现，学生checkpoint和推理均不包含教师或adapter。
+- 输入与优化：学生输入352；教师输入364（26×26 patch grid）；encoder LR5e-5、decoder/adapter LR2e-4、warmup5后余弦退火；计划 seed1234、batch8、200 epoch、Kvasir 880/120。
+- 权重：服务器无法访问 Hugging Face，已从 Meta 官方直链下载原始 DINOv2 ViT-S/14 权重到 `/data/models/zsy/mslau-net/pretrained/dinov2_vits14_pretrain.pth`；两端 SHA256 均为 `b938bf1bc15cd2ec0feacfe3a1bb553fe8ea9ca46a7e1d8d00217f29aef60cd9`。原始 `mask_token` 仅属遮挡预训练，加载时显式移除，其他174个键严格匹配。
+- 验证：`py_compile`、CLI、随机batch2的352前向/五路监督/Lovasz反向通过；reverse correction梯度非零；P3 0.871511 checkpoint仍可strict加载。DINO教师保持eval且无梯度，四个adapter和学生encoder梯度非零。
+- 真实数据冒烟：8 train/4 val、batch4、1 epoch在GPU0完成，train/val IoU为0.1799/0.1802；P4 checkpoint可由测试脚本严格加载并推理。该数值仅验证完整链路，不作为实验效果。
+- 实验性质：这是冲击最高mIoU的组合实验，不是单变量消融。若有效，必须后续拆分 `P4 decoder`、`352`、`Lovasz`、`DINOv2` 才能归因。
+- 当前状态：正式880/120训练待启动；完成后补写best val mIoU、epoch、稳定性与run目录。
+
 ## 9. 后续每次追加记录的模板
 
 ```markdown
@@ -422,11 +442,11 @@ GitHub 远程仓库：`chuifengbushuang/MSLAU_OPT`。zsy 已配置 GitHub SSH �
 
 ## 10. 下一步优先级
 
-1. **锁定reverse-only主候选**：保留当前代码、超参数和三个checkpoint，不再恢复wavelet edge；后续模型实验以P0历史基线和reverse-only三seed均值同时作对照。
-2. **先诊断seed2026欠分割**：统计三seed coarse logits、reverse map和预测面积比，定位Recall波动来源；在诊断前不直接调reverse scale。
-3. **下一模型单变量**：若要提高稳定性，优先研究零中心reverse残差门或对reverse map做有界归一化，一次只实现一种；目标是保留Precision增益同时恢复Recall。
-4. **更强证据**：论文级结论建议再加2个预注册seed或建立独立test；当前n=3均值提升0.006860但配对结果含1次下降，不做显著性夸大。
-5. **Kvasir大改方向**：reverse机制稳定后再考虑DINOv2特征蒸馏或bottleneck Mamba；不要混合到首个稳定性实验。
+1. **完成P4组合实验**：先跑完 `cascade reverse + 352 + final Lovasz + DINOv2` seed1234；以0.871511单seed峰值和reverse-only三seed均值0.859864同时比较。
+2. **P4有效后拆分归因**：若明显刷新峰值，固定split/seed后依次去掉DINOv2、Lovasz或退回256；组合实验本身不能说明哪个模块有效。
+3. **P4失败先查优化冲突**：对比MainLoss、DistillLoss、Precision/Recall、预测面积比与reverse map；先判断是蒸馏干扰还是cascade欠分割，不直接堆新模块。
+4. **锁定reverse-only主候选**：保留P3分支、tag、三个checkpoint，不恢复wavelet edge；P0继续作为历史基线。
+5. **更强证据**：论文级结论建议再加2个预注册seed或建立独立test；当前P3 n=3均值提升0.006860但配对结果含1次下降，不做显著性夸大。
 6. **复现 CVC 历史0.90**：官方CSV/fold0、clean P0、batch8、纯Dice、最高IoU保存；只改变旧训练参数。
 7. **严格 CVC 提升**：新增完整模型`--init_checkpoint`，从Kvasir 0.860583 P0初始化；先冻结encoder，再以encoder 1e-5、decoder 1e-4微调；采用sequence-level五折。
 8. **LFF**：停止只调LR/Dropout；如重启，先完成特征幅值统计。

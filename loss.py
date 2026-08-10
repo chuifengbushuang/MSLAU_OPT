@@ -41,6 +41,64 @@ class BCEDiceLoss_binary(nn.Module):
         targets = targets.float()
         return self.bce_weight * self.bce(inputs, targets) + self.dice_weight * self.dice(inputs, targets)
 
+
+def lovasz_grad(gt_sorted):
+    """Gradient of the Lovasz extension with respect to sorted errors."""
+    num_pixels = len(gt_sorted)
+    positives = gt_sorted.sum()
+    intersection = positives - gt_sorted.float().cumsum(0)
+    union = positives + (1.0 - gt_sorted).float().cumsum(0)
+    jaccard = 1.0 - intersection / union.clamp_min(1e-7)
+    if num_pixels > 1:
+        jaccard = torch.cat((jaccard[:1], jaccard[1:] - jaccard[:-1]))
+    return jaccard
+
+
+class LovaszHingeLoss_binary(nn.Module):
+    """Per-image binary Lovasz hinge loss operating directly on logits."""
+
+    def forward(self, inputs, targets):
+        if targets.dim() == 3:
+            targets = targets.unsqueeze(1)
+        targets = targets.float()
+        losses = []
+        for logits, labels in zip(inputs, targets):
+            logits = logits.reshape(-1)
+            labels = labels.reshape(-1)
+            signs = 2.0 * labels - 1.0
+            errors = 1.0 - logits * signs
+            errors_sorted, permutation = torch.sort(errors, descending=True)
+            labels_sorted = labels[permutation]
+            losses.append(torch.dot(torch.relu(errors_sorted), lovasz_grad(labels_sorted)))
+        return torch.stack(losses).mean()
+
+
+class BCEDiceLovaszLoss_binary(nn.Module):
+    """Weighted BCE + Dice + Lovasz loss for final-mask supervision."""
+
+    def __init__(self, bce_weight=0.35, dice_weight=0.35, lovasz_weight=0.30):
+        super().__init__()
+        weights = (bce_weight, dice_weight, lovasz_weight)
+        if any(weight < 0 for weight in weights) or sum(weights) <= 0:
+            raise ValueError("Loss weights must be non-negative and cannot all be zero.")
+        weight_sum = sum(weights)
+        self.bce_weight = bce_weight / weight_sum
+        self.dice_weight = dice_weight / weight_sum
+        self.lovasz_weight = lovasz_weight / weight_sum
+        self.bce = nn.BCEWithLogitsLoss()
+        self.dice = DiceLoss_binary()
+        self.lovasz = LovaszHingeLoss_binary()
+
+    def forward(self, inputs, targets):
+        if targets.dim() == 3:
+            targets = targets.unsqueeze(1)
+        targets = targets.float()
+        return (
+            self.bce_weight * self.bce(inputs, targets)
+            + self.dice_weight * self.dice(inputs, targets)
+            + self.lovasz_weight * self.lovasz(inputs, targets)
+        )
+
 class IoU_binary(nn.Module):
     def __init__(self, weight=None, size_average=True):
         super(IoU_binary, self).__init__()
