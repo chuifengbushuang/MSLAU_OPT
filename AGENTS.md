@@ -374,6 +374,16 @@ GitHub 远程仓库：`chuifengbushuang/MSLAU_OPT`。zsy 已配置 GitHub SSH �
 - 证据：run目录 `/data/models/zsy/mslau-net/runs/kvasir_p3_progressive_noedge_noreverse_c96_aux020_010_boundary010_b16_e200_seed1234_gpu0_nw8_20260810_0426`；best checkpoint为`checkpoints/best_iou_0.856579_epoch_137_0.109669.pth`；代码提交 `7f7b261`。
 - 结论：正式重训否定了“直接删除两门控即可提升峰值”的假设，但支持“乘性门控伤害小目标、同时帮助大目标”的机制判断。下一步不应继续调阈值或补seed，而应正式训练只保留reverse的一路消融。
 
+### 2026-08-10：P3 reverse-only正式消融（运行中）
+
+- 假设：reverse attention可保留完整P3对中大目标的结构约束，同时关闭wavelet edge可减少小目标退化；post-hoc方向结果为0.861951，但必须正式重训验证。
+- 具体操作：启用progressive decoder，关闭wavelet edge，保留reverse attention、selective/channel gate、D2/D3辅助监督和boundary head；无需新增代码。
+- 控制变量：Kvasir 880/120、seed1234、0.5 BCE+0.5 Dice、batch16、无Dropout、encoder LR5e-5、decoder LR2e-4、warmup5、200 epoch；与前两轮P3一致。
+- 验证：随机batch2前向/反向确认wavelet edge=False、reverse attention=True；edge scale无梯度，reverse/channel scale梯度非零，四个输出头尺寸正确。
+- 运行状态：正式训练已跑过Epoch1并进入Epoch2；Epoch0/1 val IoU为0.5024/0.6670；GPU0约6052 MiB且利用率86%，PID 2693353。
+- 证据：run目录 `/data/models/zsy/mslau-net/runs/kvasir_p3_progressive_reverse_only_noedge_c96_aux020_010_boundary010_b16_e200_seed1234_gpu0_nw8_20260810_0514`。
+- 结论：当前仅确认实现和训练链路正常；结束前不得将post-hoc值或早期IoU作为正式结果。
+
 ## 9. 后续每次追加记录的模板
 
 ```markdown
