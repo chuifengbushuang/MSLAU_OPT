@@ -311,6 +311,10 @@ if __name__ == "__main__":
     )
     parser.add_argument("--progressive_channels", type=int, default=96,
                         help="feature channels in the P3 progressive decoder")
+    parser.add_argument("--disable_p3_wavelet_edge", action="store_true",
+                        help="disable the P3 wavelet edge multiplication gate")
+    parser.add_argument("--disable_p3_reverse_attention", action="store_true",
+                        help="disable the P3 reverse-attention multiplication gate")
     parser.add_argument("--aux_d2_weight", type=float, default=0.2,
                         help="P3 D2 auxiliary segmentation loss weight")
     parser.add_argument("--aux_d3_weight", type=float, default=0.1,
@@ -395,6 +399,8 @@ if __name__ == "__main__":
         decoder_dropout=args.decoder_dropout,
         decoder_mode=args.decoder_mode,
         progressive_channels=args.progressive_channels,
+        p3_use_wavelet_edges=not args.disable_p3_wavelet_edge,
+        p3_use_reverse_attention=not args.disable_p3_reverse_attention,
     )
     logging.info("Decoder mode: %s", model.decoder_mode)
     logging.info("Edge guidance enabled: %s", model.edge_guidance_enabled)
@@ -402,9 +408,12 @@ if __name__ == "__main__":
     logging.info("Decoder Dropout2d: %.3f", model.decoder_dropout.p)
     if model.decoder_mode == "progressive_wavelet":
         logging.info(
-            "P3 configuration: channels=%d aux_d2=%.3f aux_d3=%.3f boundary=%.3f",
+            "P3 configuration: channels=%d aux_d2=%.3f aux_d3=%.3f "
+            "boundary=%.3f wavelet_edge=%s reverse_attention=%s",
             args.progressive_channels, args.aux_d2_weight,
             args.aux_d3_weight, args.boundary_weight,
+            not args.disable_p3_wavelet_edge,
+            not args.disable_p3_reverse_attention,
         )
     load_encoder_pretrained(model, args.pretrained)
     if torch.cuda.is_available():

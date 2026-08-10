@@ -135,6 +135,10 @@ if __name__ == "__main__":
     )
     parser.add_argument("--progressive_channels", default=96, type=int,
                         help="feature channels in the P3 progressive decoder")
+    parser.add_argument("--disable_p3_wavelet_edge", action="store_true",
+                        help="disable the P3 wavelet edge multiplication gate")
+    parser.add_argument("--disable_p3_reverse_attention", action="store_true",
+                        help="disable the P3 reverse-attention multiplication gate")
     args = parser.parse_args()
 
     dataset_path = resolve_path(args.dataset)
@@ -174,6 +178,8 @@ if __name__ == "__main__":
         decoder_dropout=args.decoder_dropout,
         decoder_mode=args.decoder_mode,
         progressive_channels=args.progressive_channels,
+        p3_use_wavelet_edges=not args.disable_p3_wavelet_edge,
+        p3_use_reverse_attention=not args.disable_p3_reverse_attention,
     )
     model.load_state_dict(torch.load(model_path, map_location=device, weights_only=False))
     model = model.to(device)

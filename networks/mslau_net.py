@@ -468,7 +468,7 @@ class ProgressiveFusionBlock(nn.Module):
         self.reverse_scale = nn.Parameter(torch.tensor(0.1))
         self.refine = ResidualRefineBlock(channels)
 
-    def forward(self, skip, decoder, wavelet_edges, reverse_attention=None):
+    def forward(self, skip, decoder, wavelet_edges=None, reverse_attention=None):
         decoder = F.interpolate(
             decoder, size=skip.shape[-2:], mode="bilinear", align_corners=False)
         decoder = self.decoder_project(decoder)
@@ -477,9 +477,11 @@ class ProgressiveFusionBlock(nn.Module):
         fused = decoder + gate * skip
         fused = fused * (1.0 + self.channel_scale * self.channel_gate(fused))
 
-        edges = F.interpolate(
-            wavelet_edges, size=fused.shape[-2:], mode="bilinear", align_corners=False)
-        fused = fused * (1.0 + self.edge_scale * self.edge_gate(edges))
+        if wavelet_edges is not None:
+            edges = F.interpolate(
+                wavelet_edges, size=fused.shape[-2:],
+                mode="bilinear", align_corners=False)
+            fused = fused * (1.0 + self.edge_scale * self.edge_gate(edges))
 
         if reverse_attention is not None:
             reverse_attention = F.interpolate(
@@ -491,8 +493,11 @@ class ProgressiveFusionBlock(nn.Module):
 
 class ProgressiveWaveletDecoder(nn.Module):
     def __init__(self, encoder_channels=(64, 128, 256, 512), channels=96,
-                 num_classes=1, dropout=0.0):
+                 num_classes=1, dropout=0.0, use_wavelet_edges=True,
+                 use_reverse_attention=True):
         super().__init__()
+        self.use_wavelet_edges = use_wavelet_edges
+        self.use_reverse_attention = use_reverse_attention
         self.wavelet = HaarWaveletEdgeHead()
         self.context = MultiScaleContextBlock(encoder_channels[3], channels)
         self.fuse3 = ProgressiveFusionBlock(encoder_channels[2], channels)
@@ -516,12 +521,15 @@ class ProgressiveWaveletDecoder(nn.Module):
 
     def forward(self, encoder_features, normalized_image, output_size, return_aux=False):
         e1, e2, e3, e4 = encoder_features
-        wavelet_edges = self.wavelet(normalized_image)
+        wavelet_edges = (
+            self.wavelet(normalized_image) if self.use_wavelet_edges else None)
 
         d4 = self.context(e4)
         d3 = self.fuse3(e3, d4, wavelet_edges)
         coarse_logits = self.coarse_head(d3)
-        reverse_attention = 1.0 - torch.sigmoid(coarse_logits.detach())
+        reverse_attention = (
+            1.0 - torch.sigmoid(coarse_logits.detach())
+            if self.use_reverse_attention else None)
 
         d2 = self.fuse2(e2, d3, wavelet_edges, reverse_attention)
         d1 = self.fuse1(e1, d2, wavelet_edges, reverse_attention)
@@ -545,7 +553,8 @@ class MSLAU_net(nn.Module):
 
     def __init__(self, img_size=224, mla_channels=64,in_chans=3, num_classes=1,
                  edge_guidance_enabled=True, fusion_mode="fixed", decoder_dropout=0.0,
-                 decoder_mode="legacy", progressive_channels=96):
+                 decoder_mode="legacy", progressive_channels=96,
+                 p3_use_wavelet_edges=True, p3_use_reverse_attention=True):
         super(MSLAU_net, self).__init__()
         if decoder_mode not in {"legacy", "progressive_wavelet"}:
             raise ValueError("Unsupported decoder mode: {}".format(decoder_mode))
@@ -584,6 +593,8 @@ class MSLAU_net(nn.Module):
                 channels=progressive_channels,
                 num_classes=num_classes,
                 dropout=decoder_dropout,
+                use_wavelet_edges=p3_use_wavelet_edges,
+                use_reverse_attention=p3_use_reverse_attention,
             )
 
     def forward(self, inputs, return_aux=False):
