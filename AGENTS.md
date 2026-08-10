@@ -391,6 +391,15 @@ GitHub 远程仓库：`chuifengbushuang/MSLAU_OPT`。zsy 已配置 GitHub SSH �
 - 证据：run目录 `/data/models/zsy/mslau-net/runs/kvasir_p3_progressive_reverse_only_noedge_c96_aux020_010_boundary010_b16_e200_seed1234_gpu0_nw8_20260810_0514`；best checkpoint为`checkpoints/best_iou_0.871511_epoch_82_0.091392.pth`。
 - 结论：正式训练支持“wavelet edge是完整P3的主要负贡献，reverse attention具有正贡献”。reverse-only成为当前单seed最佳模型，但在seed42/2026完成前不能替代P0作为稳定主结论，也不在验证集上继续调阈值。
 
+### 2026-08-10：P3 reverse-only seed42/2026补跑（运行中）
+
+- 目的：验证seed1234的0.871511是否可复现，并与P0三seed均值0.853004±0.010375公平比较。
+- 控制变量：除随机种子外，与reverse-only seed1234完全一致；Kvasir 880/120、batch16、0.5 BCE+0.5 Dice、encoder LR5e-5、decoder LR2e-4、warmup5、200 epoch、wavelet edge关闭、reverse attention开启。
+- 执行：seed42在GPU0，PID3040794；seed2026在GPU1，PID3040795；两任务各num_workers8并行运行。
+- 启动验证：两组均为880/120样本，预训练加载正常，wavelet_edge=False、reverse_attention=True；已完成Epoch2并进入Epoch3。seed42前三轮val IoU为0.5055/0.6857/0.7266，seed2026为0.4977/0.6832/0.7459；两卡显存各约6052 MiB，利用率84%/80%。
+- 证据：seed42 run目录 `/data/models/zsy/mslau-net/runs/kvasir_p3_progressive_reverse_only_noedge_c96_aux020_010_boundary010_b16_e200_seed42_gpu0_nw8_20260810_0643`；seed2026 run目录 `/data/models/zsy/mslau-net/runs/kvasir_p3_progressive_reverse_only_noedge_c96_aux020_010_boundary010_b16_e200_seed2026_gpu1_nw8_20260810_0643`。
+- 结论：当前仅确认并行训练链路正常；两组完成并做统一逐图/面积分组分析前不得更新多seed结论。
+
 ## 9. 后续每次追加记录的模板
 
 ```markdown
