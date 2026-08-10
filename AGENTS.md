@@ -200,6 +200,7 @@ split：/home/zsy/projects/mslau-net/configs/splits/cvc_official_csv_fold0
 | 模型 | 最佳 val mIoU | Epoch | 结论 |
 |---|---:|---:|---|
 | 干净 P0 | **0.860583** | 84 | 当前最佳 |
+| P3 渐进式小波 decoder | 0.859276 | 126 | 低于同 seed P0 0.001307；后期更稳定但小目标退化 |
 | P0 + Dropout2d(0.1) | 0.855916 | 107 | 下降 |
 | 原加法式 LFF，LR 2e-3，无 Dropout | 0.852859 | 86 | 下降 |
 | 原加法式 LFF，LR 2e-3，Dropout 0.1 | 0.853812 | 95 | 下降 |
@@ -274,8 +275,8 @@ GitHub 远程仓库：`chuifengbushuang/MSLAU_OPT`。zsy 已配置 GitHub SSH �
 ### 8.3 随机种子实验
 
 - 操作：P0/P2 先后补跑 seed42、1234、2026，用于观察初始化、shuffle、增强等随机因素。
-- 效果：不同 seed 有波动，但本轮交接未保留所有精确数字。
-- 结论：下一位 agent 必须从 `/data/models/zsy/mslau-net/runs` 日志重新汇总，不得凭记忆补数；重要结论至少基于 3 seeds。
+- 效果：P0 seed42/1234/2026 分别为0.841179、0.860583、0.857249；均值0.853004，样本标准差0.010375，极差0.019404。
+- 结论：单 seed 提高0.003～0.008不能直接判定有效；重要结论至少基于3 seeds。
 
 ### 8.4 P2 decoder 边缘引导
 
@@ -345,9 +346,14 @@ GitHub 远程仓库：`chuifengbushuang/MSLAU_OPT`。zsy 已配置 GitHub SSH �
 - 控制变量：Kvasir 880/120、seed1234、0.5 BCE+0.5 Dice、无 Dropout、原 encoder 预训练、200 epoch；P3 batch16、encoder LR5e-5、decoder LR2e-4、warmup5。
 - 验证：`git diff --check`、`py_compile`、随机 batch2 前向/反向、旧0.860583 P0 checkpoint严格加载、真实880/120一轮训练及P3 checkpoint推理均通过。
 - 冒烟结果：真实数据1 epoch train IoU 0.5600、val IoU 0.6669；用于验证流程，不作为正式结果。
-- 正式运行：正在 GPU0 运行，PID 2042165；Epoch0 val IoU 0.5321，Epoch1 val IoU 0.6660，GPU约5982MiB且利用率约93%。
-- 证据：`/data/models/zsy/mslau-net/runs/kvasir_p3_progressive_wavelet_c96_aux020_010_boundary010_b16_e200_seed1234_gpu0_nw8_20260810_0321`；代码提交 `3869a0a`。
-- 结论：实现与训练链路已跑通；最终是否提升必须等待200 epoch结束后按最高 val IoU 与 P0 seed1234 0.860583比较。
+- 正式结果：35m12s完成。Best val IoU **0.859276@126**，对应 MainLoss0.092744；best MainLoss0.089036@40，对应IoU0.854277。最终 train/val IoU为0.9457/0.8489，最终泛化差距0.0968。
+- 稳定性：P3最后20轮val IoU为0.848130±0.000898；P0同seed最后20轮为0.839600±0.001275。P3后期均值高0.008530且波动更小，但峰值仍比P0 0.860583低0.001307。
+- 验证指标：mIoU0.8593、Dice/F1 0.9129、Precision0.9270、Recall0.9175、Accuracy0.9800、FPS141.29。P0对应Precision0.9197、Recall0.9245：P3更保守，假阳性更少但漏检更多。
+- 逐图像分析：120张中P3胜65、负54、平1，中位差+0.00217，但10张下降超过0.05并拉低均值。按GT面积四分位，最小组下降0.03237；中间两组分别提升0.01229和0.01514；最大组基本持平。最大退步样本面积仅0.73%，IoU从0.8324降到0.1721。
+- 门控参数：best checkpoint的edge scale在fuse3/2/1为0.3313/0.3087/0.1206，reverse scale为0.1000/0.1679/0.0747，说明模型更依赖较粗尺度的小波边缘。
+- 诊断性推理：不重训、仅在内存关闭reverse得到0.86054；关闭edge得到0.86189；关闭edge+reverse得到0.86224，最小面积组从0.7613升至0.7910。该结果是在val上做的post-hoc诊断，不能当正式消融或新主结果。
+- 证据：`/data/models/zsy/mslau-net/runs/kvasir_p3_progressive_wavelet_c96_aux020_010_boundary010_b16_e200_seed1234_gpu0_nw8_20260810_0321`；best checkpoint为`checkpoints/best_iou_0.859276_epoch_126_0.092744.pth`；代码提交 `3869a0a`。
+- 结论：完整P3未刷新P0峰值，不补跑其他seed。渐进式decoder/选择性通道融合具有正信号，但当前乘性wavelet edge与reverse attention伤害小目标；下一次应做正式的“保留渐进式decoder与channel gate、去掉edge/reverse”训练，而不是继续叠加模块。
 
 ## 9. 后续每次追加记录的模板
 
@@ -365,10 +371,11 @@ GitHub 远程仓库：`chuifengbushuang/MSLAU_OPT`。zsy 已配置 GitHub SSH �
 
 ## 10. 下一步优先级
 
-1. **先完成 Kvasir P3**：等待 seed1234 正式运行结束；若 best val IoU 至少达到0.865，再补 seed42/2026并与 P0 三种子均值0.853004±0.010375比较。
-2. **P3 消融**：若完整 P3 有提升，依次关闭 boundary、auxiliary、reverse attention，确认真实贡献；若未提升，先分析各 auxiliary loss和门控尺度，不盲目加模块。
-3. **Kvasir 后续模型方向**：P3 验证后再考虑 DINOv2 特征蒸馏或 bottleneck Mamba；不要同时与 P3 首轮混合。
-4. **复现 CVC 历史0.90**：官方 CSV/fold0、clean P0、batch8、纯 Dice、最高 IoU保存；只改变旧训练参数。
-5. **严格 CVC 提升**：新增完整模型 `--init_checkpoint`，从 Kvasir 0.860583 P0 初始化；先冻结 encoder，再以 encoder 1e-5、decoder 1e-4 微调；采用 sequence-level 五折。
-6. **LFF**：停止只调 LR/Dropout；如重启，先完成特征幅值统计。
-7. 每次实验完成后更新本文件，并将重要代码状态提交到清晰命名的 Git 分支；不要让 checkpoint 与代码语义错配。
+1. **P3正式消融优先**：训练“渐进式decoder + selective/channel gate”，删除wavelet edge乘性门控与reverse attention；保持其余参数不变。post-hoc 0.86224只能作为方向证据，必须重训验证。
+2. **小目标保护**：若上一步仍在最小面积组退化，再增加E1直连final的高分辨率残差或小目标辅助head；不要同时改Loss和数据增强。
+3. **P3多seed门槛**：新消融seed1234至少达到0.865才补seed42/2026；最终与P0三seed均值0.853004±0.010375比较。
+4. **Kvasir后续模型方向**：P3消融确认后再考虑DINOv2特征蒸馏或bottleneck Mamba；不要混入首轮消融。
+5. **复现 CVC 历史0.90**：官方 CSV/fold0、clean P0、batch8、纯 Dice、最高 IoU保存；只改变旧训练参数。
+6. **严格 CVC 提升**：新增完整模型 `--init_checkpoint`，从 Kvasir 0.860583 P0 初始化；先冻结 encoder，再以 encoder 1e-5、decoder 1e-4 微调；采用 sequence-level 五折。
+7. **LFF**：停止只调 LR/Dropout；如重启，先完成特征幅值统计。
+8. 每次实验完成后更新本文件，并将重要代码状态提交到清晰命名的 Git 分支；不要让 checkpoint 与代码语义错配。
