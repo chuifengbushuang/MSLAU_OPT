@@ -12,6 +12,7 @@ import albumentations as A
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from albumentations.pytorch import ToTensorV2
 from torch import optim
 from torch.autograd import Variable
@@ -133,7 +134,15 @@ def log_fusion_scale_stats(model, epoch):
         )
 
 
-def train_model(model, criterion, optimizer, scheduler, dataloaders, metric, num_epochs, save_dir):
+def make_boundary_target(labels):
+    dilated = F.max_pool2d(labels, kernel_size=3, stride=1, padding=1)
+    eroded = -F.max_pool2d(-labels, kernel_size=3, stride=1, padding=1)
+    return (dilated - eroded).clamp(0.0, 1.0)
+
+
+def train_model(model, criterion, optimizer, scheduler, dataloaders, metric,
+                num_epochs, save_dir, aux_d2_weight=0.2,
+                aux_d3_weight=0.1, boundary_weight=0.1):
     since = time.time()
     best_loss = float("inf")
     best_loss_epoch = 0
@@ -156,6 +165,7 @@ def train_model(model, criterion, optimizer, scheduler, dataloaders, metric, num
                 model.eval()
 
             running_loss = 0.0
+            running_main_loss = 0.0
             running_iou = 0.0
             running_samples = 0
 
@@ -172,8 +182,29 @@ def train_model(model, criterion, optimizer, scheduler, dataloaders, metric, num
 
                 optimizer.zero_grad()
                 with torch.set_grad_enabled(phase == "train"):
-                    outputs = model(inputs)
-                    loss = criterion(outputs, labels)
+                    model_outputs = model(
+                        inputs,
+                        return_aux=model.decoder_mode == "progressive_wavelet",
+                    )
+                    if isinstance(model_outputs, dict):
+                        outputs = model_outputs["logits"]
+                        main_loss = criterion(outputs, labels)
+                        aux_d2_loss = criterion(model_outputs["aux_d2"], labels)
+                        aux_d3_loss = criterion(model_outputs["aux_d3"], labels)
+                        boundary_loss = criterion(
+                            model_outputs["boundary_logits"],
+                            make_boundary_target(labels),
+                        )
+                        loss = (
+                            main_loss
+                            + aux_d2_weight * aux_d2_loss
+                            + aux_d3_weight * aux_d3_loss
+                            + boundary_weight * boundary_loss
+                        )
+                    else:
+                        outputs = model_outputs
+                        main_loss = criterion(outputs, labels)
+                        loss = main_loss
                     score = metric(outputs, labels)
 
                     if phase == "train":
@@ -182,19 +213,23 @@ def train_model(model, criterion, optimizer, scheduler, dataloaders, metric, num
 
                 batch_samples = inputs.size(0)
                 running_loss += loss.item() * batch_samples
+                running_main_loss += main_loss.item() * batch_samples
                 running_iou += score.item() * batch_samples
                 running_samples += batch_samples
 
             epoch_loss = running_loss / running_samples
+            epoch_main_loss = running_main_loss / running_samples
             epoch_acc = running_iou / running_samples
 
-            logging.info("{} Loss: {:.4f} IoU: {:.4f}".format(phase, epoch_loss, epoch_acc))
+            logging.info(
+                "{} Loss: {:.4f} MainLoss: {:.4f} IoU: {:.4f}".format(
+                    phase, epoch_loss, epoch_main_loss, epoch_acc))
 
-            loss_list[phase].append(epoch_loss)
+            loss_list[phase].append(epoch_main_loss)
             accuracy_list[phase].append(epoch_acc)
 
-            if phase == "valid" and epoch_loss <= best_loss:
-                best_loss = epoch_loss
+            if phase == "valid" and epoch_main_loss <= best_loss:
+                best_loss = epoch_main_loss
                 best_loss_epoch = epoch
                 best_loss_model_wts = copy.deepcopy(model.state_dict())
 
@@ -268,6 +303,26 @@ if __name__ == "__main__":
         help="initial learning rate for LFF fusion parameters",
     )
     parser.add_argument("--decoder_dropout", type=float, default=0.0, help="Dropout2d after MLA feature concatenation")
+    parser.add_argument(
+        "--decoder_mode",
+        default="legacy",
+        choices=["legacy", "progressive_wavelet"],
+        help="legacy MLA decoder or P3 progressive wavelet decoder",
+    )
+    parser.add_argument("--progressive_channels", type=int, default=96,
+                        help="feature channels in the P3 progressive decoder")
+    parser.add_argument("--aux_d2_weight", type=float, default=0.2,
+                        help="P3 D2 auxiliary segmentation loss weight")
+    parser.add_argument("--aux_d3_weight", type=float, default=0.1,
+                        help="P3 coarse D3 segmentation loss weight")
+    parser.add_argument("--boundary_weight", type=float, default=0.1,
+                        help="P3 boundary supervision loss weight")
+    parser.add_argument("--encoder_lr", type=float, default=5e-5,
+                        help="P3 encoder learning rate")
+    parser.add_argument("--decoder_lr", type=float, default=2e-4,
+                        help="P3 decoder learning rate")
+    parser.add_argument("--warmup_epochs", type=int, default=0,
+                        help="linear warmup epochs before cosine decay")
     parser.add_argument("--epoch", type=int, default=200, help="epochs")
     parser.add_argument("--seed", type=int, default=1234, help="random seed")
     parser.add_argument(
@@ -338,10 +393,19 @@ if __name__ == "__main__":
         edge_guidance_enabled=not args.disable_edge_guidance,
         fusion_mode=args.fusion_mode,
         decoder_dropout=args.decoder_dropout,
+        decoder_mode=args.decoder_mode,
+        progressive_channels=args.progressive_channels,
     )
+    logging.info("Decoder mode: %s", model.decoder_mode)
     logging.info("Edge guidance enabled: %s", model.edge_guidance_enabled)
     logging.info("Fusion mode: %s", model.fusion_mode)
     logging.info("Decoder Dropout2d: %.3f", model.decoder_dropout.p)
+    if model.decoder_mode == "progressive_wavelet":
+        logging.info(
+            "P3 configuration: channels=%d aux_d2=%.3f aux_d3=%.3f boundary=%.3f",
+            args.progressive_channels, args.aux_d2_weight,
+            args.aux_d3_weight, args.boundary_weight,
+        )
     load_encoder_pretrained(model, args.pretrained)
     if torch.cuda.is_available():
         model = model.cuda()
@@ -360,7 +424,19 @@ if __name__ == "__main__":
 
     metric = IoU_binary()
     fusion_logits = getattr(model.conv_mla, "fusion_logits", None)
-    if fusion_logits is None:
+    if model.decoder_mode == "progressive_wavelet":
+        decoder_params = [
+            param for name, param in model.named_parameters()
+            if not name.startswith("encoder.")
+        ]
+        optimizer = optim.AdamW(
+            [
+                {"params": model.encoder.parameters(), "lr": args.encoder_lr, "name": "encoder"},
+                {"params": decoder_params, "lr": args.decoder_lr, "name": "p3_decoder"},
+            ],
+            weight_decay=5e-4,
+        )
+    elif fusion_logits is None:
         optimizer = optim.AdamW(
             [{"params": model.parameters(), "lr": args.lr, "name": "base"}],
             weight_decay=5e-4,
@@ -385,7 +461,21 @@ if __name__ == "__main__":
             for group in optimizer.param_groups
         ),
     )
-    scheduler = lr_scheduler.CosineAnnealingLR(optimizer, args.epoch, eta_min=0, last_epoch=-1)
+    if args.warmup_epochs > 0:
+        if args.warmup_epochs >= args.epoch:
+            raise ValueError("warmup_epochs must be smaller than epoch")
+        warmup_scheduler = lr_scheduler.LinearLR(
+            optimizer, start_factor=0.2, total_iters=args.warmup_epochs)
+        cosine_scheduler = lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=args.epoch - args.warmup_epochs, eta_min=0)
+        scheduler = lr_scheduler.SequentialLR(
+            optimizer,
+            schedulers=[warmup_scheduler, cosine_scheduler],
+            milestones=[args.warmup_epochs],
+        )
+    else:
+        scheduler = lr_scheduler.CosineAnnealingLR(
+            optimizer, args.epoch, eta_min=0, last_epoch=-1)
     train_model(
         model,
         criterion,
@@ -395,4 +485,7 @@ if __name__ == "__main__":
         metric,
         num_epochs=args.epoch,
         save_dir=output_dir,
+        aux_d2_weight=args.aux_d2_weight,
+        aux_d3_weight=args.aux_d3_weight,
+        boundary_weight=args.boundary_weight,
     )

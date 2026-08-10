@@ -127,6 +127,14 @@ if __name__ == "__main__":
     )
     parser.add_argument("--decoder_dropout", default=0.0, type=float,
                         help="Dropout2d probability used during training")
+    parser.add_argument(
+        "--decoder_mode",
+        default="legacy",
+        choices=["legacy", "progressive_wavelet"],
+        help="decoder architecture used by the checkpoint",
+    )
+    parser.add_argument("--progressive_channels", default=96, type=int,
+                        help="feature channels in the P3 progressive decoder")
     args = parser.parse_args()
 
     dataset_path = resolve_path(args.dataset)
@@ -164,6 +172,8 @@ if __name__ == "__main__":
         edge_guidance_enabled=not args.disable_edge_guidance,
         fusion_mode=args.fusion_mode,
         decoder_dropout=args.decoder_dropout,
+        decoder_mode=args.decoder_mode,
+        progressive_channels=args.progressive_channels,
     )
     model.load_state_dict(torch.load(model_path, map_location=device, weights_only=False))
     model = model.to(device)

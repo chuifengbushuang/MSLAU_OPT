@@ -334,11 +334,223 @@ class MLAHead(nn.Module):
             mla_list[3]), 2*mla_list[3].shape[-1], mode='bilinear', align_corners=True)
         return torch.cat([head5, head4, head3, head2], dim=1)
 
+
+class ConvNormAct(nn.Sequential):
+    def __init__(self, in_channels, out_channels, kernel_size=3, padding=1,
+                 dilation=1, groups=1):
+        super().__init__(
+            nn.Conv2d(
+                in_channels,
+                out_channels,
+                kernel_size,
+                padding=padding,
+                dilation=dilation,
+                groups=groups,
+                bias=False,
+            ),
+            nn.BatchNorm2d(out_channels),
+            nn.GELU(),
+        )
+
+
+class ResidualRefineBlock(nn.Module):
+    def __init__(self, channels):
+        super().__init__()
+        self.refine = nn.Sequential(
+            ConvNormAct(channels, channels),
+            nn.Conv2d(channels, channels, 3, padding=1, bias=False),
+            nn.BatchNorm2d(channels),
+        )
+        self.act = nn.GELU()
+
+    def forward(self, x):
+        return self.act(x + self.refine(x))
+
+
+class MultiScaleContextBlock(nn.Module):
+    def __init__(self, in_channels, out_channels):
+        super().__init__()
+        self.project = ConvNormAct(in_channels, out_channels, kernel_size=1, padding=0)
+        self.branch1 = ConvNormAct(
+            out_channels, out_channels, groups=out_channels)
+        self.branch2 = ConvNormAct(
+            out_channels, out_channels, padding=2, dilation=2, groups=out_channels)
+        self.branch3 = ConvNormAct(
+            out_channels, out_channels, padding=3, dilation=3, groups=out_channels)
+        self.fuse = ConvNormAct(3 * out_channels, out_channels, kernel_size=1, padding=0)
+        self.refine = ResidualRefineBlock(out_channels)
+
+    def forward(self, x):
+        x = self.project(x)
+        context = self.fuse(torch.cat([
+            self.branch1(x), self.branch2(x), self.branch3(x)
+        ], dim=1))
+        return self.refine(x + context)
+
+
+class HaarWaveletEdgeHead(nn.Module):
+    """Parameter-free two-level Haar high-frequency extractor."""
+
+    def __init__(self):
+        super().__init__()
+        filters = torch.tensor(
+            [
+                [[1.0, 1.0], [1.0, 1.0]],
+                [[-1.0, -1.0], [1.0, 1.0]],
+                [[-1.0, 1.0], [-1.0, 1.0]],
+                [[1.0, -1.0], [-1.0, 1.0]],
+            ]
+        ).unsqueeze(1) / 2.0
+        self.register_buffer("haar_filters", filters, persistent=False)
+        self.register_buffer(
+            "image_mean",
+            torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1),
+            persistent=False,
+        )
+        self.register_buffer(
+            "image_std",
+            torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1),
+            persistent=False,
+        )
+
+    def forward(self, normalized_image):
+        if normalized_image.shape[1] == 1:
+            image = normalized_image.repeat(1, 3, 1, 1)
+        else:
+            image = normalized_image[:, :3]
+        image = (image * self.image_std + self.image_mean).clamp(0.0, 1.0)
+        gray = (
+            0.299 * image[:, 0:1]
+            + 0.587 * image[:, 1:2]
+            + 0.114 * image[:, 2:3]
+        )
+
+        level1 = F.conv2d(gray, self.haar_filters, stride=2)
+        level2 = F.conv2d(level1[:, :1], self.haar_filters, stride=2)
+        high1 = level1[:, 1:].abs()
+        high2 = F.interpolate(
+            level2[:, 1:].abs(), size=high1.shape[-2:],
+            mode="bilinear", align_corners=False)
+        edges = torch.cat([high1, high2], dim=1)
+        scale = edges.flatten(2).amax(dim=2).view(edges.shape[0], 6, 1, 1)
+        return edges / scale.clamp_min(1e-6)
+
+
+class ProgressiveFusionBlock(nn.Module):
+    def __init__(self, skip_channels, channels, edge_channels=6):
+        super().__init__()
+        self.skip_project = ConvNormAct(
+            skip_channels, channels, kernel_size=1, padding=0)
+        self.decoder_project = ConvNormAct(
+            channels, channels, kernel_size=1, padding=0)
+        hidden_channels = max(16, channels // 4)
+        self.selective_gate = nn.Sequential(
+            nn.Conv2d(2 * channels, channels, 1, bias=False),
+            nn.BatchNorm2d(channels),
+            nn.GELU(),
+            nn.Conv2d(channels, channels, 1),
+            nn.Sigmoid(),
+        )
+        self.channel_gate = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Conv2d(channels, hidden_channels, 1),
+            nn.GELU(),
+            nn.Conv2d(hidden_channels, channels, 1),
+            nn.Sigmoid(),
+        )
+        self.edge_gate = nn.Sequential(
+            nn.Conv2d(edge_channels, channels, 1, bias=False),
+            nn.BatchNorm2d(channels),
+            nn.Sigmoid(),
+        )
+        self.edge_scale = nn.Parameter(torch.tensor(0.1))
+        self.channel_scale = nn.Parameter(torch.tensor(0.1))
+        self.reverse_scale = nn.Parameter(torch.tensor(0.1))
+        self.refine = ResidualRefineBlock(channels)
+
+    def forward(self, skip, decoder, wavelet_edges, reverse_attention=None):
+        decoder = F.interpolate(
+            decoder, size=skip.shape[-2:], mode="bilinear", align_corners=False)
+        decoder = self.decoder_project(decoder)
+        skip = self.skip_project(skip)
+        gate = self.selective_gate(torch.cat([skip, decoder], dim=1))
+        fused = decoder + gate * skip
+        fused = fused * (1.0 + self.channel_scale * self.channel_gate(fused))
+
+        edges = F.interpolate(
+            wavelet_edges, size=fused.shape[-2:], mode="bilinear", align_corners=False)
+        fused = fused * (1.0 + self.edge_scale * self.edge_gate(edges))
+
+        if reverse_attention is not None:
+            reverse_attention = F.interpolate(
+                reverse_attention, size=fused.shape[-2:],
+                mode="bilinear", align_corners=False)
+            fused = fused * (1.0 + self.reverse_scale * reverse_attention)
+        return self.refine(fused)
+
+
+class ProgressiveWaveletDecoder(nn.Module):
+    def __init__(self, encoder_channels=(64, 128, 256, 512), channels=96,
+                 num_classes=1, dropout=0.0):
+        super().__init__()
+        self.wavelet = HaarWaveletEdgeHead()
+        self.context = MultiScaleContextBlock(encoder_channels[3], channels)
+        self.fuse3 = ProgressiveFusionBlock(encoder_channels[2], channels)
+        self.fuse2 = ProgressiveFusionBlock(encoder_channels[1], channels)
+        self.fuse1 = ProgressiveFusionBlock(encoder_channels[0], channels)
+        self.coarse_head = nn.Conv2d(channels, num_classes, 1)
+        self.aux_d2_head = nn.Conv2d(channels, num_classes, 1)
+        self.boundary_head = nn.Sequential(
+            ConvNormAct(channels, channels // 2),
+            nn.Conv2d(channels // 2, num_classes, 1),
+        )
+        self.final_refine = ResidualRefineBlock(channels)
+        self.dropout = nn.Dropout2d(dropout)
+        self.final_head = nn.Conv2d(channels, num_classes, 3, padding=1)
+
+    @staticmethod
+    def resize_logits(logits, output_size):
+        return F.interpolate(
+            logits, size=(output_size, output_size),
+            mode="bilinear", align_corners=False)
+
+    def forward(self, encoder_features, normalized_image, output_size, return_aux=False):
+        e1, e2, e3, e4 = encoder_features
+        wavelet_edges = self.wavelet(normalized_image)
+
+        d4 = self.context(e4)
+        d3 = self.fuse3(e3, d4, wavelet_edges)
+        coarse_logits = self.coarse_head(d3)
+        reverse_attention = 1.0 - torch.sigmoid(coarse_logits.detach())
+
+        d2 = self.fuse2(e2, d3, wavelet_edges, reverse_attention)
+        d1 = self.fuse1(e1, d2, wavelet_edges, reverse_attention)
+        final_features = F.interpolate(
+            d1, scale_factor=2, mode="bilinear", align_corners=False)
+        final_features = self.final_refine(final_features)
+        logits = self.final_head(self.dropout(final_features))
+        logits = self.resize_logits(logits, output_size)
+
+        if not return_aux:
+            return logits
+        return {
+            "logits": logits,
+            "aux_d2": self.resize_logits(self.aux_d2_head(d2), output_size),
+            "aux_d3": self.resize_logits(coarse_logits, output_size),
+            "boundary_logits": self.resize_logits(
+                self.boundary_head(d1), output_size),
+        }
+
 class MSLAU_net(nn.Module):
 
     def __init__(self, img_size=224, mla_channels=64,in_chans=3, num_classes=1,
-                 edge_guidance_enabled=True, fusion_mode="fixed", decoder_dropout=0.0):
+                 edge_guidance_enabled=True, fusion_mode="fixed", decoder_dropout=0.0,
+                 decoder_mode="legacy", progressive_channels=96):
         super(MSLAU_net, self).__init__()
+        if decoder_mode not in {"legacy", "progressive_wavelet"}:
+            raise ValueError("Unsupported decoder mode: {}".format(decoder_mode))
+        if decoder_mode == "progressive_wavelet" and fusion_mode != "fixed":
+            raise ValueError("Progressive wavelet decoder requires fusion_mode='fixed'")
         self.img_size = img_size
         self.norm_cfg = None
         self.mla_channels = mla_channels
@@ -348,23 +560,45 @@ class MSLAU_net(nn.Module):
         self.decoder_channels = 4 * self.mla_channels
         self.edge_guidance_enabled = edge_guidance_enabled
         self.fusion_mode = fusion_mode
+        self.decoder_mode = decoder_mode
         self.decoder_dropout = nn.Dropout2d(p=decoder_dropout)
 
         self.encoder = Encoder(
             depth=[4, 8, 11, 5], img_size=img_size, in_chans=3, num_classes=1, embed_dim=[64, 128, 256, 512],
             head_dim=64, mlp_ratio=4., qkv_bias=True, qk_scale=None)
-        self.conv_mla = Conv_MLA(
-            embed_dim=[64, 128, 256, 512], mla_channels=mla_channels,
-            fusion_mode=fusion_mode)
-        self.mlahead = MLAHead(mla_channels=mla_channels)
-        self.edge_guidance = EdgeGuidedAttention(channels=self.decoder_channels)
-        self.seg = nn.Conv2d(self.decoder_channels, self.num_classes, 3, padding=1)
+        if decoder_mode == "legacy":
+            self.conv_mla = Conv_MLA(
+                embed_dim=[64, 128, 256, 512], mla_channels=mla_channels,
+                fusion_mode=fusion_mode)
+            self.mlahead = MLAHead(mla_channels=mla_channels)
+            self.edge_guidance = EdgeGuidedAttention(channels=self.decoder_channels)
+            self.seg = nn.Conv2d(self.decoder_channels, self.num_classes, 3, padding=1)
+            self.progressive_decoder = None
+        else:
+            self.conv_mla = None
+            self.mlahead = None
+            self.edge_guidance = None
+            self.seg = None
+            self.progressive_decoder = ProgressiveWaveletDecoder(
+                encoder_channels=(64, 128, 256, 512),
+                channels=progressive_channels,
+                num_classes=num_classes,
+                dropout=decoder_dropout,
+            )
 
-    def forward(self, inputs):
+    def forward(self, inputs, return_aux=False):
         edge_inputs = inputs
         if inputs.size()[1] == 1:
             inputs = inputs.repeat(1, 3, 1, 1)
         encoder_features = self.encoder(inputs)
+
+        if self.decoder_mode == "progressive_wavelet":
+            return self.progressive_decoder(
+                encoder_features,
+                normalized_image=edge_inputs,
+                output_size=self.img_size,
+                return_aux=return_aux,
+            )
 
         conv_mla_features = self.conv_mla(encoder_features)
 
