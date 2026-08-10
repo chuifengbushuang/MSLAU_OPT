@@ -201,6 +201,7 @@ split：/home/zsy/projects/mslau-net/configs/splits/cvc_official_csv_fold0
 |---|---:|---:|---|
 | 干净 P0 | **0.860583** | 84 | 当前最佳 |
 | P3 渐进式小波 decoder | 0.859276 | 126 | 低于同 seed P0 0.001307；后期更稳定但小目标退化 |
+| P3 去 wavelet edge/reverse | 0.856579 | 137 | 小目标恢复、后期最稳定，但最大目标明显退化 |
 | P0 + Dropout2d(0.1) | 0.855916 | 107 | 下降 |
 | 原加法式 LFF，LR 2e-3，无 Dropout | 0.852859 | 86 | 下降 |
 | 原加法式 LFF，LR 2e-3，Dropout 0.1 | 0.853812 | 95 | 下降 |
@@ -355,15 +356,23 @@ GitHub 远程仓库：`chuifengbushuang/MSLAU_OPT`。zsy 已配置 GitHub SSH �
 - 证据：`/data/models/zsy/mslau-net/runs/kvasir_p3_progressive_wavelet_c96_aux020_010_boundary010_b16_e200_seed1234_gpu0_nw8_20260810_0321`；best checkpoint为`checkpoints/best_iou_0.859276_epoch_126_0.092744.pth`；代码提交 `3869a0a`。
 - 结论：完整P3未刷新P0峰值，不补跑其他seed。渐进式decoder/选择性通道融合具有正信号，但当前乘性wavelet edge与reverse attention伤害小目标；下一次应做正式的“保留渐进式decoder与channel gate、去掉edge/reverse”训练，而不是继续叠加模块。
 
-### 2026-08-10：P3 去小波边缘门与反向注意力正式消融（运行中）
+### 2026-08-10：P3 去小波边缘门与反向注意力正式消融
 
 - 假设：完整P3对小目标的退化主要来自wavelet edge与reverse attention乘性门控，而非渐进式decoder本身。
 - 具体操作：为P3增加两个显式且默认关闭兼容性不变的CLI消融开关；本次关闭wavelet edge gate与reverse attention，保留progressive decoder、multi-scale context、selective/channel gate、D2/D3辅助监督及boundary head。
 - 控制变量：Kvasir 880/120、seed1234、0.5 BCE+0.5 Dice、batch16、无Dropout、encoder LR5e-5、decoder LR2e-4、warmup5、200 epoch；与完整P3一致。
 - 验证：语法与CLI检查通过；随机batch2前向/反向确认edge/reverse参数无梯度而channel gate有梯度；旧完整P3 checkpoint 874项strict加载通过；真实数据1 epoch train/val完整通过，val IoU 0.702868。
-- 运行状态：正式训练已启动并跑过Epoch2，前三轮val IoU为0.5196/0.6700/0.7267；GPU0进程PID 2381529。
-- 证据：run目录 `/data/models/zsy/mslau-net/runs/kvasir_p3_progressive_noedge_noreverse_c96_aux020_010_boundary010_b16_e200_seed1234_gpu0_nw8_20260810_0426`；代码提交 `7f7b261`。
-- 结论：目前只能确认实现与训练链路正常；训练完成前不得报告正式提升或与P0作最终比较。
+- 正式结果：34m49s完成。Best val IoU **0.856579@137**，对应MainLoss0.109669；best MainLoss0.100314@130，对应IoU0.854861。最终train/val IoU为0.9457/0.8552，泛化差距0.0905。
+- 对比：比同seed P0低0.004004，比完整P3低0.002697；不满足0.865的多seed门槛，不补seed42/2026。
+- 稳定性：最后20轮val IoU为0.855090±0.000793，共65轮达到0.85；完整P3分别为0.848130±0.000922和47轮，P0为0.839600±0.001308和12轮。该消融峰值降低，但后期最稳且泛化差距最小。
+- 验证指标：mIoU0.856579、Dice/F1 0.912337、Precision0.931128、Recall0.916956、Accuracy0.973530。相对P0仍偏高Precision、低Recall，表现为更保守的分割。
+- 面积分组：最小到最大GT面积四分位IoU为0.796212/0.876358/0.894080/0.859666；完整P3为0.761470/0.892878/0.895429/0.887326。关闭两门控修复了小目标，但最大目标下降0.027660，成为总分下降的主因。
+- 逐图对比：相对P0胜73、负47，中位差+0.002999，但14张下降超过0.05、13张提升超过0.05，少量严重退步样本拉低均值；相对完整P3胜64、负56，中位差+0.000873。
+- 阈值诊断：0.30到0.70扫描的最佳阈值为0.425，mIoU仅0.856916，比默认0.5提高0.000337，说明问题不是简单的输出阈值失配。
+- 训练动态：channel scale在fuse3/2/1为0.3995/0.3435/0.1463，高于完整P3的0.3755/0.3123/0.1382，说明去掉空间门控后channel gate有所补偿。
+- post-hoc方向证据：在完整P3 checkpoint上仅保留edge为0.860584，仅保留reverse为0.861951，两者都关为0.862309；这些仍是同一val上的诊断，不能当正式结果。按面积分组，edge更保护最大目标，reverse在总分和小目标间更均衡。
+- 证据：run目录 `/data/models/zsy/mslau-net/runs/kvasir_p3_progressive_noedge_noreverse_c96_aux020_010_boundary010_b16_e200_seed1234_gpu0_nw8_20260810_0426`；best checkpoint为`checkpoints/best_iou_0.856579_epoch_137_0.109669.pth`；代码提交 `7f7b261`。
+- 结论：正式重训否定了“直接删除两门控即可提升峰值”的假设，但支持“乘性门控伤害小目标、同时帮助大目标”的机制判断。下一步不应继续调阈值或补seed，而应正式训练只保留reverse的一路消融。
 
 ## 9. 后续每次追加记录的模板
 
@@ -381,11 +390,12 @@ GitHub 远程仓库：`chuifengbushuang/MSLAU_OPT`。zsy 已配置 GitHub SSH �
 
 ## 10. 下一步优先级
 
-1. **P3正式消融优先**：训练“渐进式decoder + selective/channel gate”，删除wavelet edge乘性门控与reverse attention；保持其余参数不变。post-hoc 0.86224只能作为方向证据，必须重训验证。
-2. **小目标保护**：若上一步仍在最小面积组退化，再增加E1直连final的高分辨率残差或小目标辅助head；不要同时改Loss和数据增强。
-3. **P3多seed门槛**：新消融seed1234至少达到0.865才补seed42/2026；最终与P0三seed均值0.853004±0.010375比较。
-4. **Kvasir后续模型方向**：P3消融确认后再考虑DINOv2特征蒸馏或bottleneck Mamba；不要混入首轮消融。
-5. **复现 CVC 历史0.90**：官方 CSV/fold0、clean P0、batch8、纯 Dice、最高 IoU保存；只改变旧训练参数。
-6. **严格 CVC 提升**：新增完整模型 `--init_checkpoint`，从 Kvasir 0.860583 P0 初始化；先冻结 encoder，再以 encoder 1e-5、decoder 1e-4 微调；采用 sequence-level 五折。
-7. **LFF**：停止只调 LR/Dropout；如重启，先完成特征幅值统计。
-8. 每次实验完成后更新本文件，并将重要代码状态提交到清晰命名的 Git 分支；不要让 checkpoint 与代码语义错配。
+1. **P3 reverse-only正式消融**：关闭wavelet edge、恢复reverse attention，其余配置与两轮P3完全一致。该方案是单变量实验，post-hoc为0.861951，且比edge-only更均衡；seed1234达到0.865才补seed42/2026。
+2. **若reverse-only仍不达0.865**：停止逐个门控组合，改为训练期门控正则化。优先尝试edge/reverse gate stochastic drop或逐步衰减到0，使门控参与特征学习但推理端不依赖乘性调制；一次只实现一种策略。
+3. **大目标保护诊断**：继续固定四分位报告；若reverse-only最大面积组仍低于0.88，检查coarse D3监督与reverse mask是否造成内部欠分割，再考虑将乘法门改为零中心残差门，而不是直接增加新head。
+4. **稳定性利用**：当前去双门控模型最后20轮稳定但峰值低；EMA/SWA可作为后续训练策略对照，但优先级低于reverse-only，预计不能单独弥补0.004差距。
+5. **Kvasir后续大改方向**：P3门控消融结束后再考虑DINOv2特征蒸馏或bottleneck Mamba；不要与门控实验混合。
+6. **复现 CVC 历史0.90**：官方 CSV/fold0、clean P0、batch8、纯 Dice、最高 IoU保存；只改变旧训练参数。
+7. **严格 CVC 提升**：新增完整模型 `--init_checkpoint`，从 Kvasir 0.860583 P0 初始化；先冻结 encoder，再以 encoder 1e-5、decoder 1e-4 微调；采用 sequence-level五折。
+8. **LFF**：停止只调LR/Dropout；如重启，先完成特征幅值统计。
+9. 每次实验完成后更新本文件，并将重要代码状态提交到清晰命名的Git分支；不要让checkpoint与代码语义错配。
