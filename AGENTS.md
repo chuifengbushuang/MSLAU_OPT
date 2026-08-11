@@ -3,7 +3,7 @@
 > 本文件是 Codex 的长期项目记忆。每次代码修改或实验完成后都必须更新。
 > 本文件位于 Git 仓库根目录，是 Mac、`.120`、`.194` 三端同步时的唯一权威版本。
 > `handover.md` 仅用于一次性交接本轮对话，不替代本文件。
-> 最近更新：2026-08-10。
+> 最近更新：2026-08-11。
 
 ## 1. 长期目标
 
@@ -200,6 +200,9 @@ split：/home/zsy/projects/mslau-net/configs/splits/cvc_official_csv_fold0
 | 模型 | 最佳 val mIoU | Epoch | 结论 |
 |---|---:|---:|---|
 | P3 reverse-only（无wavelet edge） | **0.859864±0.010269**（best 0.871511） | 39/82/57 | 当前三seed最高均值；2/3 seed提升 |
+| P3 reverse-only + 352（seed1234） | 0.860625 | 20 | 比同seed 256低0.010886；停止放大输入 |
+| P4 cascade + Lovasz + DINOv2（seed1234） | 0.862562 | 139 | Precision升、Recall明显降；未超过P3 |
+| P4 no-final-reverse（seed1234） | 0.860338 | 52 | Recall恢复但假阳性增多；P4路线暂停 |
 | 干净 P0 | 0.853004±0.010375（best 0.860583） | 100/84/51 | 历史可信主基线 |
 | P3 渐进式小波 decoder | 0.859276 | 126 | 低于同 seed P0 0.001307；后期更稳定但小目标退化 |
 | P3 去 wavelet edge/reverse | 0.856579 | 137 | 小目标恢复、后期最稳定，但最大目标明显退化 |
@@ -454,8 +457,20 @@ GitHub 远程仓库：`chuifengbushuang/MSLAU_OPT`。zsy 已配置 GitHub SSH �
 - 具体操作：使用P3 `progressive_wavelet` decoder，关闭wavelet edge、保留reverse attention；唯一实验变量为输入从256改为352。分支为`kvasir-p3-reverse-only-352`。
 - 控制变量：Kvasir 880/120、seed1234、batch16、0.5 BCE+0.5 Dice、D2/D3/boundary权重0.2/0.1/0.1、无Dropout、无DINOv2、encoder LR5e-5、decoder LR2e-4、warmup5、200 epoch。
 - 验证：旧P3 0.871511 checkpoint在352实例上strict加载；随机batch16完整前后向峰值显存约8.9GiB，reverse与final head梯度非零；无需降低batch。完整880/120一轮冒烟train/val IoU为0.5628/0.6690，checkpoint推理通过，FPS128.12。
-- 正式运行：已在GPU0启动，PID `505366`；run目录为 `/data/models/zsy/mslau-net/runs/kvasir_p3_reverse_only_352_noedge_c96_aux020_010_boundary010_b16_e200_seed1234_gpu0_nw8_20260811_064300`。
-- 启动验证：GPU0利用率99%、显存约11.15GiB；日志确认352、wavelet edge关闭、reverse开启且无DINO。Epoch0/1 val IoU为0.5399/0.6901，已进入Epoch2。成功判据为超过同seed P3 0.871511，若刷新再补seed42/2026；当前早期数值不作效果结论。
+- 正式结果：53m03s完成。Best val IoU **0.860625@20**，对应MainLoss0.084584；最终train/val IoU为0.9461/0.8465，泛化差距0.0996。最后20轮val IoU为0.845325±0.001063，仅28轮达到0.85。
+- 对比与机制：比同seed P3-256低0.010886，训练时间增加约50%；Precision从0.9391降至0.9261而Recall仅从0.9245降至0.9227。四个GT面积四分位IoU全部下降，预测面积/GT从0.9527升至0.9715，小中目标假阳性增加。阈值扫描最佳0.525仅提升约0.0001，排除简单校准问题。
+- 证据：run目录 `/data/models/zsy/mslau-net/runs/kvasir_p3_reverse_only_352_noedge_c96_aux020_010_boundary010_b16_e200_seed1234_gpu0_nw8_20260811_064300`；best checkpoint为`checkpoints/best_iou_0.860625_epoch_20_0.084584.pth`。
+- 结论：假设被否定。当前编码器/decoder不能有效利用额外分辨率，352放大背景纹理并加速过拟合；不补其他seed，停止单纯分辨率扩展。
+
+### 2026-08-11：P5 SAM2 Hiera-L Adapter + P3 reverse-only
+
+- 假设：P3的主要剩余瓶颈是小数据下的编码器表征和少数灾难性困难样本，而不是输入分辨率；冻结SAM2 Hiera-L并只训练轻量Adapter，可提供更强四尺度表征，同时保留P3已验证的reverse-only解码机制。
+- 具体操作：新增`sam2_hiera_large`编码器和显式`p5_hiera_reverse`模式；Hiera-L主体冻结且始终eval，四级输出144/288/576/1152通道，各接一个零初始化瓶颈残差Adapter；随后接原P3 progressive decoder，强制关闭wavelet edge、保留coarse detach reverse attention及D2/D3/boundary监督。训练/测试CLI均支持P5 checkpoint语义。
+- 权重：官方timm Hiera-L safetensors位于`/data/models/zsy/mslau-net/pretrained/sam2_hiera_large.fb_r1024.safetensors`，大小848661592 bytes，SHA256 `7694579e76566289f25f63799024a2fe83144005c75ece6c09458254aa3ee13c`；加载时严格映射586个backbone键并忽略分类head。
+- 控制变量：Kvasir 880/120、seed1234、输入352、batch16、num_workers8、150 epoch、0.5 BCE+0.5 Dice、D2/D3/boundary权重0.2/0.1/0.1、channels96、无Dropout；Adapter LR1e-4、decoder LR5e-4、warmup5后cosine。
+- 验证：`git diff --check`、`py_compile`通过；旧P3 0.871511 checkpoint strict加载通过；随机batch16与真实Kvasir batch16前后向通过。冻结backbone无梯度，四级Adapter和decoder梯度非零；总参数214279297、可训练参数2130001；随机batch16峰值显存约4.26GiB。
+- 正式运行：GPU0，PID `858742`；run目录 `/data/models/zsy/mslau-net/runs/kvasir_p5_hiera_l_frozen_adapters_p3_reverse_352_c96_b16_e150_seed1234_gpu0_nw8_20260811_0817`。Epoch0 train/val IoU为0.4977/0.6010，GPU利用率100%、显存约7.17GiB，已进入Epoch1。
+- 当前结论：完整链路已跑通，尚未形成性能结论；刷新门槛为同seed P3的0.871511。代码分支`kvasir-p5-hiera-reverse`，提交`8d7b95f`。
 
 ## 9. 后续每次追加记录的模板
 
@@ -473,9 +488,9 @@ GitHub 远程仓库：`chuifengbushuang/MSLAU_OPT`。zsy 已配置 GitHub SSH �
 
 ## 10. 下一步优先级
 
-1. **完成P3 reverse-only + 352**：这是当前唯一性能主实验；以0.871511为刷新门槛，并检查小目标面积组与FPS变化。
-2. **依据352结果决策**：若超过0.871511，补seed42/2026；若为0.867～0.8715，仅保留方向证据；若低于0.867，停止352路线并恢复256。
-3. **下一单变量**：仅在352有效后加入轻量0.10 Lovasz（0.45 BCE+0.45 Dice+0.10 Lovasz）；DINOv2固定0.1和P4 cascade暂不继续。
+1. **完成P5 Hiera-L Adapter + P3 reverse-only**：当前唯一性能主实验；先确认完整150 epoch及best checkpoint，以同seedP3 0.871511为刷新门槛。
+2. **依据P5结果决策**：若超过0.871511，先做逐图、面积组和Precision/Recall诊断，再补seed42/2026；若低于0.868，停止直接Hiera混合，转向困难样本/不确定性反向修正或BAMPolyp强基准。
+3. **停止旧失败路线**：不再补P3-352、不继续P4 cascade/no-final-reverse，也不继续固定0.1 DINOv2蒸馏或简单Lovasz叠加。
 4. **锁定reverse-only主候选**：保留P3分支、tag、三个checkpoint，不恢复wavelet edge；P0继续作为历史基线。
 5. **更强证据**：论文级结论建议再加2个预注册seed或建立独立test；当前P3 n=3均值提升0.006860但配对结果含1次下降，不做显著性夸大。
 6. **复现 CVC 历史0.90**：官方CSV/fold0、clean P0、batch8、纯Dice、最高IoU保存；只改变旧训练参数。
