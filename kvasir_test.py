@@ -131,7 +131,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--decoder_mode",
         default="legacy",
-        choices=["legacy", "progressive_wavelet", "cascade_reverse", "p5_hiera_reverse"],
+        choices=[
+            "legacy", "progressive_wavelet", "cascade_reverse",
+            "p5_hiera_reverse", "p5_sam2unet"],
         help="decoder architecture used by the checkpoint",
     )
     parser.add_argument(

@@ -238,7 +238,7 @@ class Encoder(nn.Module):
 
 
 class SpatialFeatureAdapter(nn.Module):
-    """Small residual adapter for a frozen hierarchical encoder feature."""
+    """Legacy P5 residual adapter applied after a complete Hiera stage."""
 
     def __init__(self, channels, reduction=4):
         super().__init__()
@@ -254,15 +254,34 @@ class SpatialFeatureAdapter(nn.Module):
         return x + self.up(self.act(self.down(self.norm(x))))
 
 
+class HieraBlockAdapter(nn.Module):
+    """Official SAM2-UNet prompt adapter applied before each Hiera block."""
+
+    def __init__(self, block, bottleneck=32):
+        super().__init__()
+        self.block = block
+        dim = block.attn.qkv.in_features
+        self.prompt_learn = nn.Sequential(
+            nn.Linear(dim, bottleneck),
+            nn.GELU(),
+            nn.Linear(bottleneck, dim),
+            nn.GELU(),
+        )
+
+    def forward(self, x):
+        return self.block(x + self.prompt_learn(x))
+
+
 class HieraFeatureEncoder(nn.Module):
-    """Frozen SAM2 Hiera backbone with trainable residual output adapters."""
+    """Frozen SAM2 Hiera backbone with selectable trainable adapters."""
 
     CHANNELS = {
         "sam2_hiera_large": (144, 288, 576, 1152),
     }
 
     def __init__(self, model_name="sam2_hiera_large", checkpoint_path=None,
-                 freeze_backbone=True, adapter_reduction=4):
+                 freeze_backbone=True, adapter_mode="stage_output",
+                 adapter_reduction=4):
         super().__init__()
         import timm
 
@@ -270,6 +289,7 @@ class HieraFeatureEncoder(nn.Module):
             raise ValueError("Unsupported Hiera encoder: {}".format(model_name))
         self.model_name = model_name
         self.freeze_backbone = freeze_backbone
+        self.adapter_mode = adapter_mode
         self.out_channels = self.CHANNELS[model_name]
         self.backbone = timm.create_model(
             model_name,
@@ -281,10 +301,18 @@ class HieraFeatureEncoder(nn.Module):
         if freeze_backbone:
             self.backbone.requires_grad_(False)
             self.backbone.eval()
-        self.adapters = nn.ModuleList([
-            SpatialFeatureAdapter(channels, reduction=adapter_reduction)
-            for channels in self.out_channels
-        ])
+        if adapter_mode == "stage_output":
+            self.adapters = nn.ModuleList([
+                SpatialFeatureAdapter(channels, reduction=adapter_reduction)
+                for channels in self.out_channels
+            ])
+        elif adapter_mode == "block_prompt":
+            self.adapters = None
+            self.backbone.model.blocks = nn.ModuleList([
+                HieraBlockAdapter(block) for block in self.backbone.model.blocks
+            ])
+        else:
+            raise ValueError("Unsupported Hiera adapter mode: {}".format(adapter_mode))
 
     def _load_backbone_checkpoint(self, checkpoint_path):
         if checkpoint_path.endswith(".safetensors"):
@@ -316,11 +344,13 @@ class HieraFeatureEncoder(nn.Module):
         return self
 
     def forward(self, x):
-        if self.freeze_backbone:
+        if self.freeze_backbone and self.adapter_mode == "stage_output":
             with torch.no_grad():
                 features = self.backbone(x)
         else:
             features = self.backbone(x)
+        if self.adapters is None:
+            return features
         return [adapter(feature) for adapter, feature in zip(self.adapters, features)]
 
 class Conv_MLA(nn.Module):
@@ -760,6 +790,110 @@ class CascadeReverseDecoder(nn.Module):
                 self.boundary_head(d1), output_size),
         }
 
+
+class BasicConv2d(nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_size, stride=1,
+                 padding=0, dilation=1):
+        super().__init__()
+        self.conv = nn.Conv2d(
+            in_channels, out_channels, kernel_size, stride=stride,
+            padding=padding, dilation=dilation, bias=False)
+        self.bn = nn.BatchNorm2d(out_channels)
+
+    def forward(self, x):
+        return self.bn(self.conv(x))
+
+
+class RFBModified(nn.Module):
+    """Receptive-field block used by the official SAM2-UNet decoder."""
+
+    def __init__(self, in_channels, out_channels):
+        super().__init__()
+        self.branch0 = BasicConv2d(in_channels, out_channels, 1)
+        self.branch1 = nn.Sequential(
+            BasicConv2d(in_channels, out_channels, 1),
+            BasicConv2d(out_channels, out_channels, (1, 3), padding=(0, 1)),
+            BasicConv2d(out_channels, out_channels, (3, 1), padding=(1, 0)),
+            BasicConv2d(out_channels, out_channels, 3, padding=3, dilation=3),
+        )
+        self.branch2 = nn.Sequential(
+            BasicConv2d(in_channels, out_channels, 1),
+            BasicConv2d(out_channels, out_channels, (1, 5), padding=(0, 2)),
+            BasicConv2d(out_channels, out_channels, (5, 1), padding=(2, 0)),
+            BasicConv2d(out_channels, out_channels, 3, padding=5, dilation=5),
+        )
+        self.branch3 = nn.Sequential(
+            BasicConv2d(in_channels, out_channels, 1),
+            BasicConv2d(out_channels, out_channels, (1, 7), padding=(0, 3)),
+            BasicConv2d(out_channels, out_channels, (7, 1), padding=(3, 0)),
+            BasicConv2d(out_channels, out_channels, 3, padding=7, dilation=7),
+        )
+        self.conv_cat = BasicConv2d(4 * out_channels, out_channels, 3, padding=1)
+        self.conv_res = BasicConv2d(in_channels, out_channels, 1)
+        self.relu = nn.ReLU(inplace=True)
+
+    def forward(self, x):
+        branches = [self.branch0(x), self.branch1(x), self.branch2(x), self.branch3(x)]
+        return self.relu(self.conv_cat(torch.cat(branches, dim=1)) + self.conv_res(x))
+
+
+class SAM2UNetUp(nn.Module):
+    def __init__(self, channels=64):
+        super().__init__()
+        self.conv = nn.Sequential(
+            nn.Conv2d(2 * channels, channels, 3, padding=1, bias=False),
+            nn.BatchNorm2d(channels),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(channels, channels, 3, padding=1, bias=False),
+            nn.BatchNorm2d(channels),
+            nn.ReLU(inplace=True),
+        )
+
+    def forward(self, decoder, skip):
+        decoder = F.interpolate(
+            decoder, size=skip.shape[-2:], mode="bilinear", align_corners=True)
+        return self.conv(torch.cat([skip, decoder], dim=1))
+
+
+class SAM2UNetDecoder(nn.Module):
+    """Official RFB + U-shaped decoder with two deeply supervised outputs."""
+
+    def __init__(self, encoder_channels=(144, 288, 576, 1152), channels=64,
+                 num_classes=1):
+        super().__init__()
+        self.rfbs = nn.ModuleList([
+            RFBModified(in_channels, channels) for in_channels in encoder_channels
+        ])
+        self.up1 = SAM2UNetUp(channels)
+        self.up2 = SAM2UNetUp(channels)
+        self.up3 = SAM2UNetUp(channels)
+        self.side1 = nn.Conv2d(channels, num_classes, 1)
+        self.side2 = nn.Conv2d(channels, num_classes, 1)
+        self.head = nn.Conv2d(channels, num_classes, 1)
+
+    @staticmethod
+    def resize_logits(logits, output_size):
+        return F.interpolate(
+            logits, size=(output_size, output_size),
+            mode="bilinear", align_corners=False)
+
+    def forward(self, encoder_features, output_size, return_aux=False):
+        e1, e2, e3, e4 = [
+            rfb(feature) for rfb, feature in zip(self.rfbs, encoder_features)
+        ]
+        d3 = self.up1(e4, e3)
+        d2 = self.up2(d3, e2)
+        d1 = self.up3(d2, e1)
+        logits = self.resize_logits(self.head(d1), output_size)
+        if not return_aux:
+            return logits
+        return {
+            "logits": logits,
+            "aux_d2": self.resize_logits(self.side2(d2), output_size),
+            "aux_d3": self.resize_logits(self.side1(d3), output_size),
+        }
+
+
 class MSLAU_net(nn.Module):
 
     def __init__(self, img_size=224, mla_channels=64,in_chans=3, num_classes=1,
@@ -771,15 +905,16 @@ class MSLAU_net(nn.Module):
         super(MSLAU_net, self).__init__()
         if decoder_mode not in {
                 "legacy", "progressive_wavelet", "cascade_reverse",
-                "p5_hiera_reverse"}:
+                "p5_hiera_reverse", "p5_sam2unet"}:
             raise ValueError("Unsupported decoder mode: {}".format(decoder_mode))
         if decoder_mode != "legacy" and fusion_mode != "fixed":
             raise ValueError("Progressive decoders require fusion_mode='fixed'")
         if encoder_name not in {"mslau", "sam2_hiera_large"}:
             raise ValueError("Unsupported encoder: {}".format(encoder_name))
-        if decoder_mode == "p5_hiera_reverse" and encoder_name != "sam2_hiera_large":
+        if decoder_mode in {"p5_hiera_reverse", "p5_sam2unet"} and encoder_name != "sam2_hiera_large":
             raise ValueError("P5 requires encoder_name='sam2_hiera_large'")
-        if encoder_name == "sam2_hiera_large" and decoder_mode != "p5_hiera_reverse":
+        if encoder_name == "sam2_hiera_large" and decoder_mode not in {
+                "p5_hiera_reverse", "p5_sam2unet"}:
             raise ValueError("SAM2 Hiera encoder is currently reserved for P5")
         self.img_size = img_size
         self.norm_cfg = None
@@ -805,6 +940,9 @@ class MSLAU_net(nn.Module):
                 model_name=encoder_name,
                 checkpoint_path=hiera_checkpoint,
                 freeze_backbone=freeze_hiera_backbone,
+                adapter_mode=(
+                    "block_prompt" if decoder_mode == "p5_sam2unet"
+                    else "stage_output"),
             )
             encoder_channels = self.encoder.out_channels
         if decoder_mode == "legacy":
@@ -833,12 +971,18 @@ class MSLAU_net(nn.Module):
                         True if decoder_mode == "p5_hiera_reverse"
                         else p3_use_reverse_attention),
                 )
-            else:
+            elif decoder_mode == "cascade_reverse":
                 self.progressive_decoder = CascadeReverseDecoder(
                     encoder_channels=encoder_channels,
                     channels=progressive_channels,
                     num_classes=num_classes,
                     dropout=decoder_dropout,
+                )
+            else:
+                self.progressive_decoder = SAM2UNetDecoder(
+                    encoder_channels=encoder_channels,
+                    channels=64,
+                    num_classes=num_classes,
                 )
 
     def forward(self, inputs, return_aux=False, return_features=False):

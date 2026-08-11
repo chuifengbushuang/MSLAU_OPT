@@ -25,6 +25,7 @@ from loss import (
     BCEDiceLovaszLoss_binary,
     DiceLoss_binary,
     IoU_binary,
+    StructureLoss_binary,
 )
 from networks.mslau_net import MSLAU_net
 
@@ -145,6 +146,19 @@ def make_boundary_target(labels):
     return (dilated - eroded).clamp(0.0, 1.0)
 
 
+def snapshot_state_dict(model):
+    return {
+        key: value.detach().cpu().clone()
+        for key, value in model.state_dict().items()
+    }
+
+
+def atomic_save_state_dict(state_dict, path):
+    temporary_path = path + ".tmp"
+    torch.save(state_dict, temporary_path)
+    os.replace(temporary_path, path)
+
+
 class DINOv2FeatureDistiller(nn.Module):
     """Training-only multi-level feature distillation from frozen DINOv2."""
 
@@ -221,10 +235,11 @@ def train_model(model, criterion, optimizer, scheduler, dataloaders, metric,
     since = time.time()
     best_loss = float("inf")
     best_loss_epoch = 0
-    best_loss_model_wts = copy.deepcopy(model.state_dict())
+    best_loss_model_wts = snapshot_state_dict(model)
     best_iou = float("-inf")
     best_iou_epoch = 0
-    best_iou_model_wts = copy.deepcopy(model.state_dict())
+    best_iou_model_wts = snapshot_state_dict(model)
+    stable_path = os.path.join(save_dir, "kvasir_best_model.pth")
 
     loss_list = {"train": [], "valid": []}
     accuracy_list = {"train": [], "valid": []}
@@ -273,13 +288,21 @@ def train_model(model, criterion, optimizer, scheduler, dataloaders, metric,
                             supervision_criterion(model_outputs["aux_d1"], labels)
                             if "aux_d1" in model_outputs else outputs.new_zeros(())
                         )
-                        aux_d2_loss = supervision_criterion(
-                            model_outputs["aux_d2"], labels)
-                        aux_d3_loss = supervision_criterion(
-                            model_outputs["aux_d3"], labels)
-                        boundary_loss = supervision_criterion(
-                            model_outputs["boundary_logits"],
-                            make_boundary_target(labels),
+                        aux_d2_loss = (
+                            supervision_criterion(model_outputs["aux_d2"], labels)
+                            if "aux_d2" in model_outputs else outputs.new_zeros(())
+                        )
+                        aux_d3_loss = (
+                            supervision_criterion(model_outputs["aux_d3"], labels)
+                            if "aux_d3" in model_outputs else outputs.new_zeros(())
+                        )
+                        boundary_loss = (
+                            supervision_criterion(
+                                model_outputs["boundary_logits"],
+                                make_boundary_target(labels),
+                            )
+                            if boundary_weight > 0 and "boundary_logits" in model_outputs
+                            else outputs.new_zeros(())
                         )
                         loss = (
                             main_loss
@@ -326,12 +349,15 @@ def train_model(model, criterion, optimizer, scheduler, dataloaders, metric,
             if phase == "valid" and epoch_main_loss <= best_loss:
                 best_loss = epoch_main_loss
                 best_loss_epoch = epoch
-                best_loss_model_wts = copy.deepcopy(model.state_dict())
+                best_loss_model_wts = snapshot_state_dict(model)
 
             if phase == "valid" and epoch_acc >= best_iou:
                 best_iou = epoch_acc
                 best_iou_epoch = epoch
-                best_iou_model_wts = copy.deepcopy(model.state_dict())
+                best_iou_model_wts = snapshot_state_dict(model)
+                atomic_save_state_dict(best_iou_model_wts, stable_path)
+                logging.info(
+                    "Saved running best-IoU checkpoint: %s", stable_path)
 
             if phase == "train":
                 learning_rates = ", ".join(
@@ -359,10 +385,9 @@ def train_model(model, criterion, optimizer, scheduler, dataloaders, metric,
         save_dir,
         f"best_iou_{best_iou:.6f}_epoch_{best_iou_epoch}_{best_iou_loss:.6f}.pth",
     )
-    stable_path = os.path.join(save_dir, "kvasir_best_model.pth")
     torch.save(best_loss_model_wts, best_loss_path)
     torch.save(best_iou_model_wts, best_iou_path)
-    torch.save(best_iou_model_wts, stable_path)
+    atomic_save_state_dict(best_iou_model_wts, stable_path)
 
     time_elapsed = time.time() - since
     logging.info("Training complete in {:.0f}m {:.0f}s".format(time_elapsed // 60, time_elapsed % 60))
@@ -389,7 +414,7 @@ if __name__ == "__main__":
     parser.add_argument("--img_size", type=int, default=256, help="square input size")
     parser.add_argument(
         "--loss", default="bce_dice",
-        choices=["ce", "dice", "bce_dice", "bce_dice_lovasz"],
+        choices=["ce", "dice", "bce_dice", "bce_dice_lovasz", "structure"],
         help="final-mask loss type",
     )
     parser.add_argument("--bce_weight", type=float, default=0.5, help="BCE weight in bce_dice loss")
@@ -408,8 +433,10 @@ if __name__ == "__main__":
     parser.add_argument(
         "--decoder_mode",
         default="legacy",
-        choices=["legacy", "progressive_wavelet", "cascade_reverse", "p5_hiera_reverse"],
-        help="legacy, P3 progressive, P4 cascade reverse, or P5 Hiera decoder",
+        choices=[
+            "legacy", "progressive_wavelet", "cascade_reverse",
+            "p5_hiera_reverse", "p5_sam2unet"],
+        help="legacy, P3/P4, legacy P5 hybrid, or official-style SAM2-UNet",
     )
     parser.add_argument(
         "--encoder_name",
@@ -571,6 +598,19 @@ if __name__ == "__main__":
             model.encoder.freeze_backbone, args.progressive_channels,
             args.aux_d2_weight, args.aux_d3_weight, args.boundary_weight,
         )
+    elif model.decoder_mode == "p5_sam2unet":
+        if not args.hiera_checkpoint:
+            raise ValueError("P5 SAM2-UNet requires --hiera_checkpoint")
+        if not os.path.exists(resolve_path(args.hiera_checkpoint)):
+            raise FileNotFoundError(
+                "Hiera checkpoint not found: {}".format(
+                    resolve_path(args.hiera_checkpoint)))
+        logging.info(
+            "P5 SAM2-UNet configuration: adapter=block_prompt bottleneck=32 "
+            "backbone_frozen=%s rfb_channels=64 aux_d2=%.3f aux_d3=%.3f",
+            model.encoder.freeze_backbone,
+            args.aux_d2_weight, args.aux_d3_weight,
+        )
     if args.encoder_name == "mslau":
         load_encoder_pretrained(model, args.pretrained)
     elif args.pretrained:
@@ -593,10 +633,14 @@ if __name__ == "__main__":
             dice_weight=args.dice_weight,
             lovasz_weight=args.lovasz_weight,
         )
+    elif args.loss == "structure":
+        criterion = StructureLoss_binary()
     else:
         raise ValueError(f"Unsupported loss type: {args.loss}")
 
-    aux_criterion = BCEDiceLoss_binary(bce_weight=0.5, dice_weight=0.5)
+    aux_criterion = (
+        criterion if args.loss == "structure"
+        else BCEDiceLoss_binary(bce_weight=0.5, dice_weight=0.5))
     metric = IoU_binary()
     distiller = None
     if args.distill_teacher != "none":

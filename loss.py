@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torchmetrics.classification import BinaryConfusionMatrix
 
 cfs = BinaryConfusionMatrix()
@@ -40,6 +41,36 @@ class BCEDiceLoss_binary(nn.Module):
             targets = targets.unsqueeze(1)
         targets = targets.float()
         return self.bce_weight * self.bce(inputs, targets) + self.dice_weight * self.dice(inputs, targets)
+
+
+class StructureLoss_binary(nn.Module):
+    """Boundary-aware weighted BCE + weighted IoU from SAM2-UNet/PraNet."""
+
+    def __init__(self, kernel_size=31, boundary_weight=5.0):
+        super().__init__()
+        self.kernel_size = kernel_size
+        self.boundary_weight = boundary_weight
+
+    def forward(self, inputs, targets):
+        if targets.dim() == 3:
+            targets = targets.unsqueeze(1)
+        targets = targets.float()
+        padding = self.kernel_size // 2
+        weights = 1.0 + self.boundary_weight * torch.abs(
+            F.avg_pool2d(
+                targets, kernel_size=self.kernel_size,
+                stride=1, padding=padding) - targets)
+        weighted_bce = F.binary_cross_entropy_with_logits(
+            inputs, targets, reduction="none")
+        weighted_bce = (weights * weighted_bce).sum(dim=(2, 3)) / (
+            weights.sum(dim=(2, 3)).clamp_min(1e-7))
+
+        probabilities = torch.sigmoid(inputs)
+        intersection = (probabilities * targets * weights).sum(dim=(2, 3))
+        union = ((probabilities + targets) * weights).sum(dim=(2, 3))
+        weighted_iou = 1.0 - (intersection + 1.0) / (
+            union - intersection + 1.0)
+        return (weighted_bce + weighted_iou).mean()
 
 
 def lovasz_grad(gt_sorted):
