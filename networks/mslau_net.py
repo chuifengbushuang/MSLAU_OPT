@@ -614,8 +614,9 @@ class CascadeReverseDecoder(nn.Module):
     """P4 coarse-to-fine decoder with stage-local reverse residual correction."""
 
     def __init__(self, encoder_channels=(64, 128, 256, 512), channels=96,
-                 num_classes=1, dropout=0.0):
+                 num_classes=1, dropout=0.0, use_final_reverse=True):
         super().__init__()
+        self.use_final_reverse = use_final_reverse
         self.context = MultiScaleContextBlock(encoder_channels[3], channels)
         self.fuse3 = SelectiveFusionBlock(encoder_channels[2], channels)
         self.fuse2 = SelectiveFusionBlock(encoder_channels[1], channels)
@@ -657,7 +658,8 @@ class CascadeReverseDecoder(nn.Module):
 
         final_features = F.interpolate(
             d1, scale_factor=2, mode="bilinear", align_corners=False)
-        final_features = self.reverse_final(final_features, logits_d1)
+        if self.use_final_reverse:
+            final_features = self.reverse_final(final_features, logits_d1)
         final_features = self.final_refine(final_features)
         logits = self.final_head(self.dropout(final_features))
         logits = self.resize_logits(logits, output_size)
@@ -678,7 +680,8 @@ class MSLAU_net(nn.Module):
     def __init__(self, img_size=224, mla_channels=64,in_chans=3, num_classes=1,
                  edge_guidance_enabled=True, fusion_mode="fixed", decoder_dropout=0.0,
                  decoder_mode="legacy", progressive_channels=96,
-                 p3_use_wavelet_edges=True, p3_use_reverse_attention=True):
+                 p3_use_wavelet_edges=True, p3_use_reverse_attention=True,
+                 p4_use_final_reverse=True):
         super(MSLAU_net, self).__init__()
         if decoder_mode not in {"legacy", "progressive_wavelet", "cascade_reverse"}:
             raise ValueError("Unsupported decoder mode: {}".format(decoder_mode))
@@ -727,6 +730,7 @@ class MSLAU_net(nn.Module):
                     channels=progressive_channels,
                     num_classes=num_classes,
                     dropout=decoder_dropout,
+                    use_final_reverse=p4_use_final_reverse,
                 )
 
     def forward(self, inputs, return_aux=False, return_features=False):

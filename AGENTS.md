@@ -424,8 +424,23 @@ GitHub 远程仓库：`chuifengbushuang/MSLAU_OPT`。zsy 已配置 GitHub SSH �
 - 验证：`py_compile`、CLI、随机batch2的352前向/五路监督/Lovasz反向通过；reverse correction梯度非零；P3 0.871511 checkpoint仍可strict加载。DINO教师保持eval且无梯度，四个adapter和学生encoder梯度非零。
 - 真实数据冒烟：8 train/4 val、batch4、1 epoch在GPU0完成，train/val IoU为0.1799/0.1802；P4 checkpoint可由测试脚本严格加载并推理。该数值仅验证完整链路，不作为实验效果。
 - 实验性质：这是冲击最高mIoU的组合实验，不是单变量消融。若有效，必须后续拆分 `P4 decoder`、`352`、`Lovasz`、`DINOv2` 才能归因。
-- 正式运行：已在GPU0启动880/120、seed1234、batch8、num_workers8、200 epoch，PID `3649621`；run目录为 `/data/models/zsy/mslau-net/runs/kvasir_p4_cascade_reverse_352_lovasz_dinov2_vits14_dw010_c96_aux010_020_010_bnd010_b8_e200_seed1234_gpu0_nw8_20260810_080951`。
-- 启动验证：GPU0约占6.7GiB且利用率93%；Epoch0 train/val IoU为0.4340/0.6071，train DistillLoss0.8613，已进入Epoch1。完成后补写best val mIoU、epoch与稳定性，当前早期数值不作效果结论。
+- 正式结果：87m03s完成。Best val IoU **0.862562@139**，对应MainLoss0.277615；best MainLoss0.192077@17，对应IoU0.850508；最终train/val IoU为0.9496/0.8533，泛化差距0.0963。
+- 稳定性：最后20轮val IoU为0.854000±0.000925；114轮达到0.85、仅6轮达到0.86。峰值比同seed P0高0.001979，但比P3 reverse-only低0.008949，且P3最后20轮为0.858555±0.000678。
+- 验证指标：mIoU0.862559、Dice/F1 0.9177、Precision0.9435、Recall0.9053、Accuracy0.9771、FPS102.68。相对P3的Precision0.939108/Recall0.924487，P4进一步提高Precision但Recall下降约0.0192。
+- 面积诊断：P4总预测面积仅为GT的92.30%，P3为95.27%；9张预测面积不足GT的80%，出现1张空预测。四个面积组IoU为0.809031/0.885418/0.890622/0.865166，仅第二组高于P3；最大面积组预测面积仅为GT的88.57%。
+- 逐图对比：相对P3胜57、负63；7张提升超过0.05，14张下降超过0.05，平均差-0.008951、中位差-0.001341，少量灾难性欠分割进一步拉低均值。
+- reverse参数：D3→D2、D2→D1、D1→final scale分别学习到0.1751/0.1468/0.1206；三级纠错叠加与欠分割现象相关，但尚不能证明因果。
+- 蒸馏：DistillLoss从前10轮平均0.4904降至最后20轮0.2050；固定0.1权重在训练末期仍贡献约0.0205，相对MainLoss0.0547并不小，可能持续约束后期域内适配。
+- 证据：run目录 `/data/models/zsy/mslau-net/runs/kvasir_p4_cascade_reverse_352_lovasz_dinov2_vits14_dw010_c96_aux010_020_010_bnd010_b8_e200_seed1234_gpu0_nw8_20260810_080951`；best checkpoint为`checkpoints/best_iou_0.862562_epoch_139_0.277615.pth`；代码提交`38c2e22`。
+- 结论：P4组合未刷新P3峰值，不能升级为主模型；直接失败机制是Recall下降和预测面积收缩。第一优先级做单变量“关闭D1→final reverse”，其余P4配置不变。
+
+### 2026-08-11：P4 no-final-reverse 单变量实验
+
+- 假设：P4 的第三级 D1→final reverse residual correction 与前两级纠错累积，导致预测区域收缩；只关闭该级可能恢复Recall，同时保留cascade的逐级空间纠错。
+- 具体操作：在独立分支 `kvasir-p4-no-final-reverse` 新增默认兼容的 `p4_use_final_reverse`/`--disable_p4_final_reverse` 开关；本实验仅绕过final reverse，保留模块参数以兼容旧P4 checkpoint。
+- 控制变量：与P4完全一致；Kvasir 880/120、seed1234、352、batch8、200 epoch、final 0.35 BCE+0.35 Dice+0.30 Lovasz、DINOv2 weight0.1、encoder LR5e-5、decoder/adapter LR2e-4、warmup5。
+- 验证：`py_compile`、CLI与diff检查通过；旧P4 0.862562 checkpoint strict加载；随机batch2确认前两级reverse与final head梯度非零、final reverse梯度为None；真实8/4样本含DINOv2的一轮训练和checkpoint推理通过。
+- 当前状态：正式880/120训练待启动；完成后比较Recall、总预测面积、面积四分位和灾难性失败样本。
 
 ## 9. 后续每次追加记录的模板
 
@@ -443,9 +458,9 @@ GitHub 远程仓库：`chuifengbushuang/MSLAU_OPT`。zsy 已配置 GitHub SSH �
 
 ## 10. 下一步优先级
 
-1. **完成P4组合实验**：先跑完 `cascade reverse + 352 + final Lovasz + DINOv2` seed1234；以0.871511单seed峰值和reverse-only三seed均值0.859864同时比较。
-2. **P4有效后拆分归因**：若明显刷新峰值，固定split/seed后依次去掉DINOv2、Lovasz或退回256；组合实验本身不能说明哪个模块有效。
-3. **P4失败先查优化冲突**：对比MainLoss、DistillLoss、Precision/Recall、预测面积比与reverse map；先判断是蒸馏干扰还是cascade欠分割，不直接堆新模块。
+1. **完成P4 no-final-reverse**：固定P4全部配置，只关闭D1→final reverse；重点检查Recall能否从0.9053恢复、预测面积比能否从92.30%回升。
+2. **依据单变量结果决策**：若明显改善，继续围绕两级cascade优化；若无改善，恢复原P4并优先将DINOv2 weight从固定0.1改为前期蒸馏、后期衰减到0。
+3. **组合实验必须拆分归因**：后续再依次去掉DINOv2、降低Lovasz权重或退回256；不要从当前P4直接堆叠新模块。
 4. **锁定reverse-only主候选**：保留P3分支、tag、三个checkpoint，不恢复wavelet edge；P0继续作为历史基线。
 5. **更强证据**：论文级结论建议再加2个预注册seed或建立独立test；当前P3 n=3均值提升0.006860但配对结果含1次下降，不做显著性夸大。
 6. **复现 CVC 历史0.90**：官方CSV/fold0、clean P0、batch8、纯Dice、最高IoU保存；只改变旧训练参数。

@@ -417,6 +417,8 @@ if __name__ == "__main__":
                         help="disable the P3 wavelet edge multiplication gate")
     parser.add_argument("--disable_p3_reverse_attention", action="store_true",
                         help="disable the P3 reverse-attention multiplication gate")
+    parser.add_argument("--disable_p4_final_reverse", action="store_true",
+                        help="disable the P4 D1-to-final reverse residual correction")
     parser.add_argument("--aux_d2_weight", type=float, default=0.2,
                         help="P3 D2 auxiliary segmentation loss weight")
     parser.add_argument("--aux_d1_weight", type=float, default=0.1,
@@ -520,6 +522,7 @@ if __name__ == "__main__":
         progressive_channels=args.progressive_channels,
         p3_use_wavelet_edges=not args.disable_p3_wavelet_edge,
         p3_use_reverse_attention=not args.disable_p3_reverse_attention,
+        p4_use_final_reverse=not args.disable_p4_final_reverse,
     )
     logging.info("Decoder mode: %s", model.decoder_mode)
     logging.info("Edge guidance enabled: %s", model.edge_guidance_enabled)
@@ -538,9 +541,10 @@ if __name__ == "__main__":
     elif model.decoder_mode == "cascade_reverse":
         logging.info(
             "P4 configuration: channels=%d aux_d1=%.3f aux_d2=%.3f "
-            "aux_d3=%.3f boundary=%.3f",
+            "aux_d3=%.3f boundary=%.3f final_reverse=%s",
             args.progressive_channels, args.aux_d1_weight,
             args.aux_d2_weight, args.aux_d3_weight, args.boundary_weight,
+            not args.disable_p4_final_reverse,
         )
     load_encoder_pretrained(model, args.pretrained)
     if torch.cuda.is_available():

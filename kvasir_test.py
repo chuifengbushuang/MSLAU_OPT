@@ -140,6 +140,8 @@ if __name__ == "__main__":
                         help="disable the P3 wavelet edge multiplication gate")
     parser.add_argument("--disable_p3_reverse_attention", action="store_true",
                         help="disable the P3 reverse-attention multiplication gate")
+    parser.add_argument("--disable_p4_final_reverse", action="store_true",
+                        help="disable the P4 D1-to-final reverse residual correction")
     args = parser.parse_args()
 
     dataset_path = resolve_path(args.dataset)
@@ -182,6 +184,7 @@ if __name__ == "__main__":
         progressive_channels=args.progressive_channels,
         p3_use_wavelet_edges=not args.disable_p3_wavelet_edge,
         p3_use_reverse_attention=not args.disable_p3_reverse_attention,
+        p4_use_final_reverse=not args.disable_p4_final_reverse,
     )
     model.load_state_dict(torch.load(model_path, map_location=device, weights_only=False))
     model = model.to(device)
