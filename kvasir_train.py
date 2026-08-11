@@ -408,8 +408,20 @@ if __name__ == "__main__":
     parser.add_argument(
         "--decoder_mode",
         default="legacy",
-        choices=["legacy", "progressive_wavelet", "cascade_reverse"],
-        help="legacy, P3 progressive, or P4 cascade reverse decoder",
+        choices=["legacy", "progressive_wavelet", "cascade_reverse", "p5_hiera_reverse"],
+        help="legacy, P3 progressive, P4 cascade reverse, or P5 Hiera decoder",
+    )
+    parser.add_argument(
+        "--encoder_name",
+        default="mslau",
+        choices=["mslau", "sam2_hiera_large"],
+        help="feature encoder; P5 uses a frozen SAM2 Hiera-L backbone",
+    )
+    parser.add_argument(
+        "--hiera_checkpoint",
+        type=str,
+        default=None,
+        help="local pretrained SAM2 Hiera checkpoint used to initialize P5",
     )
     parser.add_argument("--progressive_channels", type=int, default=96,
                         help="feature channels in the P3 progressive decoder")
@@ -520,7 +532,11 @@ if __name__ == "__main__":
         progressive_channels=args.progressive_channels,
         p3_use_wavelet_edges=not args.disable_p3_wavelet_edge,
         p3_use_reverse_attention=not args.disable_p3_reverse_attention,
+        encoder_name=args.encoder_name,
+        hiera_checkpoint=(
+            resolve_path(args.hiera_checkpoint) if args.hiera_checkpoint else None),
     )
+    logging.info("Encoder: %s", model.encoder_name)
     logging.info("Decoder mode: %s", model.decoder_mode)
     logging.info("Edge guidance enabled: %s", model.edge_guidance_enabled)
     logging.info("Fusion mode: %s", model.fusion_mode)
@@ -542,7 +558,23 @@ if __name__ == "__main__":
             args.progressive_channels, args.aux_d1_weight,
             args.aux_d2_weight, args.aux_d3_weight, args.boundary_weight,
         )
-    load_encoder_pretrained(model, args.pretrained)
+    elif model.decoder_mode == "p5_hiera_reverse":
+        if not args.hiera_checkpoint:
+            raise ValueError("P5 requires --hiera_checkpoint with pretrained Hiera-L weights")
+        if not os.path.exists(resolve_path(args.hiera_checkpoint)):
+            raise FileNotFoundError(
+                "Hiera checkpoint not found: {}".format(
+                    resolve_path(args.hiera_checkpoint)))
+        logging.info(
+            "P5 configuration: frozen_hiera=%s channels=%d aux_d2=%.3f "
+            "aux_d3=%.3f boundary=%.3f wavelet_edge=False reverse_attention=True",
+            model.encoder.freeze_backbone, args.progressive_channels,
+            args.aux_d2_weight, args.aux_d3_weight, args.boundary_weight,
+        )
+    if args.encoder_name == "mslau":
+        load_encoder_pretrained(model, args.pretrained)
+    elif args.pretrained:
+        raise ValueError("--pretrained is only valid for the original MSLAU encoder")
     if torch.cuda.is_available():
         model = model.cuda()
 
@@ -593,15 +625,25 @@ if __name__ == "__main__":
             distiller = distiller.cuda()
     fusion_logits = getattr(model.conv_mla, "fusion_logits", None)
     if model.decoder_mode != "legacy":
+        encoder_params = [
+            param for param in model.encoder.parameters() if param.requires_grad
+        ]
         decoder_params = [
             param for name, param in model.named_parameters()
             if not name.startswith("encoder.")
         ]
         parameter_groups = [
-            {"params": model.encoder.parameters(), "lr": args.encoder_lr, "name": "encoder"},
+            {"params": encoder_params, "lr": args.encoder_lr,
+             "name": "hiera_adapters" if args.encoder_name != "mslau" else "encoder"},
             {"params": decoder_params, "lr": args.decoder_lr,
              "name": "{}_decoder".format(model.decoder_mode)},
         ]
+        logging.info(
+            "Parameters: total=%d trainable=%d encoder_trainable=%d",
+            sum(param.numel() for param in model.parameters()),
+            sum(param.numel() for param in model.parameters() if param.requires_grad),
+            sum(param.numel() for param in encoder_params),
+        )
         if distiller is not None:
             parameter_groups.append({
                 "params": distiller.adapter_parameters(),

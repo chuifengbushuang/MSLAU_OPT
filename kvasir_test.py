@@ -131,8 +131,14 @@ if __name__ == "__main__":
     parser.add_argument(
         "--decoder_mode",
         default="legacy",
-        choices=["legacy", "progressive_wavelet", "cascade_reverse"],
+        choices=["legacy", "progressive_wavelet", "cascade_reverse", "p5_hiera_reverse"],
         help="decoder architecture used by the checkpoint",
+    )
+    parser.add_argument(
+        "--encoder_name",
+        default="mslau",
+        choices=["mslau", "sam2_hiera_large"],
+        help="encoder architecture used by the checkpoint",
     )
     parser.add_argument("--progressive_channels", default=96, type=int,
                         help="feature channels in the P3 progressive decoder")
@@ -182,6 +188,7 @@ if __name__ == "__main__":
         progressive_channels=args.progressive_channels,
         p3_use_wavelet_edges=not args.disable_p3_wavelet_edge,
         p3_use_reverse_attention=not args.disable_p3_reverse_attention,
+        encoder_name=args.encoder_name,
     )
     model.load_state_dict(torch.load(model_path, map_location=device, weights_only=False))
     model = model.to(device)

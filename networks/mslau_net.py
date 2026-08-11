@@ -236,6 +236,93 @@ class Encoder(nn.Module):
         features.append(x)
         return features
 
+
+class SpatialFeatureAdapter(nn.Module):
+    """Small residual adapter for a frozen hierarchical encoder feature."""
+
+    def __init__(self, channels, reduction=4):
+        super().__init__()
+        hidden_channels = max(32, channels // reduction)
+        self.norm = nn.GroupNorm(1, channels)
+        self.down = nn.Conv2d(channels, hidden_channels, 1)
+        self.act = nn.GELU()
+        self.up = nn.Conv2d(hidden_channels, channels, 1)
+        nn.init.zeros_(self.up.weight)
+        nn.init.zeros_(self.up.bias)
+
+    def forward(self, x):
+        return x + self.up(self.act(self.down(self.norm(x))))
+
+
+class HieraFeatureEncoder(nn.Module):
+    """Frozen SAM2 Hiera backbone with trainable residual output adapters."""
+
+    CHANNELS = {
+        "sam2_hiera_large": (144, 288, 576, 1152),
+    }
+
+    def __init__(self, model_name="sam2_hiera_large", checkpoint_path=None,
+                 freeze_backbone=True, adapter_reduction=4):
+        super().__init__()
+        import timm
+
+        if model_name not in self.CHANNELS:
+            raise ValueError("Unsupported Hiera encoder: {}".format(model_name))
+        self.model_name = model_name
+        self.freeze_backbone = freeze_backbone
+        self.out_channels = self.CHANNELS[model_name]
+        self.backbone = timm.create_model(
+            model_name,
+            pretrained=False,
+            features_only=True,
+        )
+        if checkpoint_path:
+            self._load_backbone_checkpoint(checkpoint_path)
+        if freeze_backbone:
+            self.backbone.requires_grad_(False)
+            self.backbone.eval()
+        self.adapters = nn.ModuleList([
+            SpatialFeatureAdapter(channels, reduction=adapter_reduction)
+            for channels in self.out_channels
+        ])
+
+    def _load_backbone_checkpoint(self, checkpoint_path):
+        if checkpoint_path.endswith(".safetensors"):
+            from safetensors.torch import load_file
+            state_dict = load_file(checkpoint_path, device="cpu")
+        else:
+            state_dict = torch.load(
+                checkpoint_path, map_location="cpu", weights_only=False)
+            state_dict = state_dict.get("state_dict", state_dict)
+            state_dict = state_dict.get("model", state_dict)
+
+        backbone_state = self.backbone.state_dict()
+        mapped_state = {}
+        for key, value in state_dict.items():
+            mapped_key = key if key.startswith("model.") else "model." + key
+            if mapped_key in backbone_state:
+                mapped_state[mapped_key] = value
+        missing_keys = sorted(set(backbone_state) - set(mapped_state))
+        if missing_keys:
+            raise RuntimeError(
+                "Hiera checkpoint is incomplete; missing {} keys, first: {}".format(
+                    len(missing_keys), missing_keys[:5]))
+        self.backbone.load_state_dict(mapped_state, strict=True)
+
+    def train(self, mode=True):
+        super().train(mode)
+        if self.freeze_backbone:
+            self.backbone.eval()
+        return self
+
+    def forward(self, x):
+        if self.freeze_backbone:
+            with torch.no_grad():
+                features = self.backbone(x)
+        else:
+            features = self.backbone(x)
+        return [adapter(feature) for adapter, feature in zip(self.adapters, features)]
+
 class Conv_MLA(nn.Module):
     def __init__(self, embed_dim=[64, 128, 256, 512], mla_channels=64, norm_cfg=None,
                  fusion_mode="fixed"):
@@ -678,12 +765,22 @@ class MSLAU_net(nn.Module):
     def __init__(self, img_size=224, mla_channels=64,in_chans=3, num_classes=1,
                  edge_guidance_enabled=True, fusion_mode="fixed", decoder_dropout=0.0,
                  decoder_mode="legacy", progressive_channels=96,
-                 p3_use_wavelet_edges=True, p3_use_reverse_attention=True):
+                 p3_use_wavelet_edges=True, p3_use_reverse_attention=True,
+                 encoder_name="mslau", hiera_checkpoint=None,
+                 freeze_hiera_backbone=True):
         super(MSLAU_net, self).__init__()
-        if decoder_mode not in {"legacy", "progressive_wavelet", "cascade_reverse"}:
+        if decoder_mode not in {
+                "legacy", "progressive_wavelet", "cascade_reverse",
+                "p5_hiera_reverse"}:
             raise ValueError("Unsupported decoder mode: {}".format(decoder_mode))
         if decoder_mode != "legacy" and fusion_mode != "fixed":
             raise ValueError("Progressive decoders require fusion_mode='fixed'")
+        if encoder_name not in {"mslau", "sam2_hiera_large"}:
+            raise ValueError("Unsupported encoder: {}".format(encoder_name))
+        if decoder_mode == "p5_hiera_reverse" and encoder_name != "sam2_hiera_large":
+            raise ValueError("P5 requires encoder_name='sam2_hiera_large'")
+        if encoder_name == "sam2_hiera_large" and decoder_mode != "p5_hiera_reverse":
+            raise ValueError("SAM2 Hiera encoder is currently reserved for P5")
         self.img_size = img_size
         self.norm_cfg = None
         self.mla_channels = mla_channels
@@ -694,14 +791,25 @@ class MSLAU_net(nn.Module):
         self.edge_guidance_enabled = edge_guidance_enabled
         self.fusion_mode = fusion_mode
         self.decoder_mode = decoder_mode
+        self.encoder_name = encoder_name
         self.decoder_dropout = nn.Dropout2d(p=decoder_dropout)
 
-        self.encoder = Encoder(
-            depth=[4, 8, 11, 5], img_size=img_size, in_chans=3, num_classes=1, embed_dim=[64, 128, 256, 512],
-            head_dim=64, mlp_ratio=4., qkv_bias=True, qk_scale=None)
+        if encoder_name == "mslau":
+            encoder_channels = (64, 128, 256, 512)
+            self.encoder = Encoder(
+                depth=[4, 8, 11, 5], img_size=img_size, in_chans=3,
+                num_classes=1, embed_dim=list(encoder_channels),
+                head_dim=64, mlp_ratio=4., qkv_bias=True, qk_scale=None)
+        else:
+            self.encoder = HieraFeatureEncoder(
+                model_name=encoder_name,
+                checkpoint_path=hiera_checkpoint,
+                freeze_backbone=freeze_hiera_backbone,
+            )
+            encoder_channels = self.encoder.out_channels
         if decoder_mode == "legacy":
             self.conv_mla = Conv_MLA(
-                embed_dim=[64, 128, 256, 512], mla_channels=mla_channels,
+                embed_dim=list(encoder_channels), mla_channels=mla_channels,
                 fusion_mode=fusion_mode)
             self.mlahead = MLAHead(mla_channels=mla_channels)
             self.edge_guidance = EdgeGuidedAttention(channels=self.decoder_channels)
@@ -712,18 +820,22 @@ class MSLAU_net(nn.Module):
             self.mlahead = None
             self.edge_guidance = None
             self.seg = None
-            if decoder_mode == "progressive_wavelet":
+            if decoder_mode in {"progressive_wavelet", "p5_hiera_reverse"}:
                 self.progressive_decoder = ProgressiveWaveletDecoder(
-                    encoder_channels=(64, 128, 256, 512),
+                    encoder_channels=encoder_channels,
                     channels=progressive_channels,
                     num_classes=num_classes,
                     dropout=decoder_dropout,
-                    use_wavelet_edges=p3_use_wavelet_edges,
-                    use_reverse_attention=p3_use_reverse_attention,
+                    use_wavelet_edges=(
+                        False if decoder_mode == "p5_hiera_reverse"
+                        else p3_use_wavelet_edges),
+                    use_reverse_attention=(
+                        True if decoder_mode == "p5_hiera_reverse"
+                        else p3_use_reverse_attention),
                 )
             else:
                 self.progressive_decoder = CascadeReverseDecoder(
-                    encoder_channels=(64, 128, 256, 512),
+                    encoder_channels=encoder_channels,
                     channels=progressive_channels,
                     num_classes=num_classes,
                     dropout=decoder_dropout,
@@ -736,7 +848,7 @@ class MSLAU_net(nn.Module):
         encoder_features = self.encoder(inputs)
 
         if self.decoder_mode != "legacy":
-            if self.decoder_mode == "progressive_wavelet":
+            if self.decoder_mode in {"progressive_wavelet", "p5_hiera_reverse"}:
                 outputs = self.progressive_decoder(
                     encoder_features,
                     normalized_image=edge_inputs,
