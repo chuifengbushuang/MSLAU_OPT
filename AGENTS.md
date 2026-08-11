@@ -470,7 +470,20 @@ GitHub 远程仓库：`chuifengbushuang/MSLAU_OPT`。zsy 已配置 GitHub SSH �
 - 控制变量：Kvasir 880/120、seed1234、输入352、batch16、num_workers8、150 epoch、0.5 BCE+0.5 Dice、D2/D3/boundary权重0.2/0.1/0.1、channels96、无Dropout；Adapter LR1e-4、decoder LR5e-4、warmup5后cosine。
 - 验证：`git diff --check`、`py_compile`通过；旧P3 0.871511 checkpoint strict加载通过；随机batch16与真实Kvasir batch16前后向通过。冻结backbone无梯度，四级Adapter和decoder梯度非零；总参数214279297、可训练参数2130001；随机batch16峰值显存约4.26GiB。
 - 正式运行：GPU0，PID `858742`；run目录 `/data/models/zsy/mslau-net/runs/kvasir_p5_hiera_l_frozen_adapters_p3_reverse_352_c96_b16_e150_seed1234_gpu0_nw8_20260811_0817`。Epoch0 train/val IoU为0.4977/0.6010，GPU利用率100%、显存约7.17GiB，已进入Epoch1。
-- 当前结论：完整链路已跑通，尚未形成性能结论；刷新门槛为同seed P3的0.871511。代码分支`kvasir-p5-hiera-reverse`，提交`8d7b95f`。
+- 中止结果：运行至Epoch88后判定失败并终止；当时best val IoU **0.8177@88**，Epoch66～85平均约0.7995±0.0090，train/val gap约0.10，从未达到0.82。相对同seed P3-256低约0.0538，相对P3-352低约0.0429。
+- 失败机制：该版只在四个stage最终输出后放Adapter，无法修改Hiera内部注意力与特征形成；冻结主干导致训练IoU也仅约0.91，同时P3 decoder对固定特征过拟合。352是次要负贡献，不能解释主要差距。
+- checkpoint：旧脚本仅在训练全部结束时统一保存；本次中止前`checkpoints`为空，因此没有可复用权重。后续已改为每次刷新best IoU原子覆盖保存`kvasir_best_model.pth`。
+- 结论：该“stage-output Adapter + P3 reverse”设计停止，不补seed。代码分支`kvasir-p5-hiera-reverse`，提交`8d7b95f`。
+
+### 2026-08-11：P5.1 官方式 SAM2-UNet 基准
+
+- 假设：先严格验证SAM2 Hiera编码器在当前880/120协议上的价值，再决定是否接P3；上一版失败主要来自Adapter位置和decoder语义错配。
+- 具体操作：按官方源码将48个Hiera block分别包装为prompt Adapter：`dim→32→dim`后与block输入相加，原Hiera参数全部冻结；四级特征经RFB压到64通道，使用经典U形decoder和两路深监督，不使用reverse、wavelet或独立boundary head。
+- Loss与训练：加入官方structure loss（边界加权BCE+加权IoU），三路输出等权；Kvasir 880/120、352、batch12、num_workers8、AdamW LR1e-3、weight decay5e-4、cosine、20 epochs、seed1234。数据划分保持不变，但仍使用本项目现有增强。
+- 可靠性修复：训练改为每次刷新best val IoU时，把CPU state_dict原子写入固定checkpoint，避免中断后没有权重；训练结束仍生成带指标的best loss/best IoU文件。
+- 验证：语法与diff检查通过；旧P3 0.871511 checkpoint strict加载通过；官方Hiera权重严格加载；随机batch12与真实Kvasir batch12前后向通过。总参数216419043、可训练4269747，其中block Adapter 1714416；Hiera原参数无梯度，Adapter和decoder梯度非零；batch12峰值显存约14.32GiB。
+- 正式运行：GPU0，PID`1041618`；run目录`/data/models/zsy/mslau-net/runs/kvasir_p5a_sam2unet_hiera_l_blockadapter32_rfb64_structure_352_b12_e20_seed1234_gpu0_nw8_20260811_0906`。Epoch0 train/val IoU为0.6711/0.7077，运行中best checkpoint已成功原子落盘（866111534 bytes）。
+- 当前结论：链路与运行中保存均已验证，尚无最终性能结论；仍以同seed P3 0.871511为刷新门槛。分支`kvasir-p5-sam2unet-official-adapter`，代码提交`6602594`。
 
 ## 9. 后续每次追加记录的模板
 
@@ -488,8 +501,8 @@ GitHub 远程仓库：`chuifengbushuang/MSLAU_OPT`。zsy 已配置 GitHub SSH �
 
 ## 10. 下一步优先级
 
-1. **完成P5 Hiera-L Adapter + P3 reverse-only**：当前唯一性能主实验；先确认完整150 epoch及best checkpoint，以同seedP3 0.871511为刷新门槛。
-2. **依据P5结果决策**：若超过0.871511，先做逐图、面积组和Precision/Recall诊断，再补seed42/2026；若低于0.868，停止直接Hiera混合，转向困难样本/不确定性反向修正或BAMPolyp强基准。
+1. **完成P5.1官方式SAM2-UNet基准**：当前唯一性能主实验；完整20 epoch后以同seedP3 0.871511为门槛，先判断Hiera路线本身是否成立。
+2. **依据P5.1结果决策**：若达到约0.86以上，再做“内部block Adapter + P3 decoder”的单变量混合；若明显低于0.86，停止SAM2路线，转向BAMPolyp或困难样本稳健优化。
 3. **停止旧失败路线**：不再补P3-352、不继续P4 cascade/no-final-reverse，也不继续固定0.1 DINOv2蒸馏或简单Lovasz叠加。
 4. **锁定reverse-only主候选**：保留P3分支、tag、三个checkpoint，不恢复wavelet edge；P0继续作为历史基线。
 5. **更强证据**：论文级结论建议再加2个预注册seed或建立独立test；当前P3 n=3均值提升0.006860但配对结果含1次下降，不做显著性夸大。
