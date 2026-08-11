@@ -440,7 +440,8 @@ GitHub 远程仓库：`chuifengbushuang/MSLAU_OPT`。zsy 已配置 GitHub SSH �
 - 具体操作：在独立分支 `kvasir-p4-no-final-reverse` 新增默认兼容的 `p4_use_final_reverse`/`--disable_p4_final_reverse` 开关；本实验仅绕过final reverse，保留模块参数以兼容旧P4 checkpoint。
 - 控制变量：与P4完全一致；Kvasir 880/120、seed1234、352、batch8、200 epoch、final 0.35 BCE+0.35 Dice+0.30 Lovasz、DINOv2 weight0.1、encoder LR5e-5、decoder/adapter LR2e-4、warmup5。
 - 验证：`py_compile`、CLI与diff检查通过；旧P4 0.862562 checkpoint strict加载；随机batch2确认前两级reverse与final head梯度非零、final reverse梯度为None；真实8/4样本含DINOv2的一轮训练和checkpoint推理通过。
-- 当前状态：正式880/120训练待启动；完成后比较Recall、总预测面积、面积四分位和灾难性失败样本。
+- 正式运行：已在GPU0启动880/120训练，PID `63572`；run目录为 `/data/models/zsy/mslau-net/runs/kvasir_p4_no_final_reverse_352_lovasz_dinov2_vits14_dw010_c96_aux010_020_010_bnd010_b8_e200_seed1234_gpu0_nw8_20260811_023028`。
+- 启动验证：日志确认`final_reverse=False`；GPU0约占6.0GiB且利用率95%；Epoch0 train/val IoU为0.4270/0.6093，已进入Epoch1。完成后比较Recall、总预测面积、面积四分位和灾难性失败样本，当前早期数值不作效果结论。
 
 ## 9. 后续每次追加记录的模板
 
