@@ -454,7 +454,8 @@ GitHub 远程仓库：`chuifengbushuang/MSLAU_OPT`。zsy 已配置 GitHub SSH �
 - 具体操作：使用P3 `progressive_wavelet` decoder，关闭wavelet edge、保留reverse attention；唯一实验变量为输入从256改为352。分支为`kvasir-p3-reverse-only-352`。
 - 控制变量：Kvasir 880/120、seed1234、batch16、0.5 BCE+0.5 Dice、D2/D3/boundary权重0.2/0.1/0.1、无Dropout、无DINOv2、encoder LR5e-5、decoder LR2e-4、warmup5、200 epoch。
 - 验证：旧P3 0.871511 checkpoint在352实例上strict加载；随机batch16完整前后向峰值显存约8.9GiB，reverse与final head梯度非零；无需降低batch。完整880/120一轮冒烟train/val IoU为0.5628/0.6690，checkpoint推理通过，FPS128.12。
-- 当前状态：正式训练待启动；成功判据为超过同seed P3 0.871511，若刷新再补seed42/2026。
+- 正式运行：已在GPU0启动，PID `505366`；run目录为 `/data/models/zsy/mslau-net/runs/kvasir_p3_reverse_only_352_noedge_c96_aux020_010_boundary010_b16_e200_seed1234_gpu0_nw8_20260811_064300`。
+- 启动验证：GPU0利用率99%、显存约11.15GiB；日志确认352、wavelet edge关闭、reverse开启且无DINO。Epoch0/1 val IoU为0.5399/0.6901，已进入Epoch2。成功判据为超过同seed P3 0.871511，若刷新再补seed42/2026；当前早期数值不作效果结论。
 
 ## 9. 后续每次追加记录的模板
 
