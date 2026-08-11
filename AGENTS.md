@@ -482,7 +482,7 @@ GitHub 远程仓库：`chuifengbushuang/MSLAU_OPT`。zsy 已配置 GitHub SSH �
 - Loss与训练：加入官方structure loss（边界加权BCE+加权IoU），三路输出等权；Kvasir 880/120、352、batch12、num_workers8、AdamW LR1e-3、weight decay5e-4、cosine、20 epochs、seed1234。数据划分保持不变，但仍使用本项目现有增强。
 - 可靠性修复：训练改为每次刷新best val IoU时，把CPU state_dict原子写入固定checkpoint，避免中断后没有权重；训练结束仍生成带指标的best loss/best IoU文件。
 - 验证：语法与diff检查通过；旧P3 0.871511 checkpoint strict加载通过；官方Hiera权重严格加载；随机batch12与真实Kvasir batch12前后向通过。总参数216419043、可训练4269747，其中block Adapter 1714416；Hiera原参数无梯度，Adapter和decoder梯度非零；batch12峰值显存约14.32GiB。
-- 正式运行：GPU0，PID`1041618`；run目录`/data/models/zsy/mslau-net/runs/kvasir_p5a_sam2unet_hiera_l_blockadapter32_rfb64_structure_352_b12_e20_seed1234_gpu0_nw8_20260811_0906`。Epoch0 train/val IoU为0.6711/0.7077，运行中best checkpoint已成功原子落盘（866111534 bytes）。
+- 正式运行：GPU0，PID`1041618`；run目录`/data/models/zsy/mslau-net/runs/kvasir_p5a_sam2unet_hiera_l_blockadapter32_rfb64_structure_352_b12_e20_seed1234_gpu0_nw8_20260811_0906`。Epoch0/1/2 val IoU为0.7077/0.7829/0.8133，运行中best checkpoint已连续成功原子更新（866111534 bytes），已进入Epoch3。
 - 当前结论：链路与运行中保存均已验证，尚无最终性能结论；仍以同seed P3 0.871511为刷新门槛。分支`kvasir-p5-sam2unet-official-adapter`，代码提交`6602594`。
 
 ## 9. 后续每次追加记录的模板
