@@ -435,7 +435,8 @@ if __name__ == "__main__":
         default="legacy",
         choices=[
             "legacy", "progressive_wavelet", "cascade_reverse",
-            "p5_hiera_reverse", "p5_sam2unet", "p5_sam2unet_detail"],
+            "p5_hiera_reverse", "p5_sam2unet", "p5_sam2unet_detail",
+            "p5_sam2unet_detail_multiscale"],
         help="legacy, P3/P4, legacy P5 hybrid, or official-style SAM2-UNet",
     )
     parser.add_argument(
@@ -609,7 +610,9 @@ if __name__ == "__main__":
             model.encoder.freeze_backbone, args.progressive_channels,
             args.aux_d2_weight, args.aux_d3_weight, args.boundary_weight,
         )
-    elif model.decoder_mode in {"p5_sam2unet", "p5_sam2unet_detail"}:
+    elif model.decoder_mode in {
+            "p5_sam2unet", "p5_sam2unet_detail",
+            "p5_sam2unet_detail_multiscale"}:
         if not args.hiera_checkpoint:
             raise ValueError("P5 SAM2-UNet requires --hiera_checkpoint")
         if not os.path.exists(resolve_path(args.hiera_checkpoint)):
@@ -621,12 +624,18 @@ if __name__ == "__main__":
             "backbone_frozen=%s rfb_channels=64 detail_refinement=%s "
             "aux_d2=%.3f aux_d3=%.3f",
             model.encoder.freeze_backbone,
-            model.decoder_mode == "p5_sam2unet_detail",
+            model.decoder_mode in {
+                "p5_sam2unet_detail", "p5_sam2unet_detail_multiscale"},
             args.aux_d2_weight, args.aux_d3_weight,
         )
+        if model.decoder_mode == "p5_sam2unet_detail_multiscale":
+            logging.info(
+                "P5.4 detail context: H/2 depthwise dilations=(1,3,5) "
+                "concat_1x1_fusion=True")
     if args.p5_detail_only:
-        if model.decoder_mode != "p5_sam2unet_detail":
-            raise ValueError("--p5_detail_only requires p5_sam2unet_detail")
+        if model.decoder_mode not in {
+                "p5_sam2unet_detail", "p5_sam2unet_detail_multiscale"}:
+            raise ValueError("--p5_detail_only requires a P5 detail decoder mode")
         if not args.init_checkpoint:
             raise ValueError("--p5_detail_only requires --init_checkpoint")
         if any(weight != 0 for weight in (

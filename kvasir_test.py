@@ -133,7 +133,8 @@ if __name__ == "__main__":
         default="legacy",
         choices=[
             "legacy", "progressive_wavelet", "cascade_reverse",
-            "p5_hiera_reverse", "p5_sam2unet", "p5_sam2unet_detail"],
+            "p5_hiera_reverse", "p5_sam2unet", "p5_sam2unet_detail",
+            "p5_sam2unet_detail_multiscale"],
         help="decoder architecture used by the checkpoint",
     )
     parser.add_argument(

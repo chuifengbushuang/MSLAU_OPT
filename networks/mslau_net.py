@@ -855,19 +855,55 @@ class SAM2UNetUp(nn.Module):
         return self.conv(torch.cat([skip, decoder], dim=1))
 
 
+class MultiScaleDepthwiseDetail(nn.Module):
+    """Lightweight local-context block at half input resolution."""
+
+    def __init__(self, channels, dilations=(1, 3, 5)):
+        super().__init__()
+        self.branches = nn.ModuleList([
+            nn.Sequential(
+                nn.Conv2d(
+                    channels, channels, 3, padding=dilation,
+                    dilation=dilation, groups=channels, bias=False),
+                nn.BatchNorm2d(channels),
+                nn.ReLU(inplace=True),
+            )
+            for dilation in dilations
+        ])
+        self.fuse = nn.Sequential(
+            nn.Conv2d(channels * len(dilations), channels, 1, bias=False),
+            nn.BatchNorm2d(channels),
+            nn.ReLU(inplace=True),
+        )
+
+    def forward(self, inputs):
+        return self.fuse(torch.cat([
+            branch(inputs) for branch in self.branches
+        ], dim=1))
+
+
 class SAM2UNetDetailRefinement(nn.Module):
     """Half-resolution RGB detail branch that predicts a residual mask correction."""
 
-    def __init__(self, decoder_channels=64, detail_channels=32, num_classes=1):
+    def __init__(self, decoder_channels=64, detail_channels=32, num_classes=1,
+                 use_multiscale_context=False):
         super().__init__()
-        self.detail_stem = nn.Sequential(
+        detail_stem_layers = [
             nn.Conv2d(3, detail_channels, 3, stride=2, padding=1, bias=False),
             nn.BatchNorm2d(detail_channels),
             nn.ReLU(inplace=True),
-            nn.Conv2d(detail_channels, detail_channels, 3, padding=1, bias=False),
-            nn.BatchNorm2d(detail_channels),
-            nn.ReLU(inplace=True),
-        )
+        ]
+        if use_multiscale_context:
+            detail_stem_layers.append(MultiScaleDepthwiseDetail(detail_channels))
+        else:
+            detail_stem_layers.extend([
+                nn.Conv2d(
+                    detail_channels, detail_channels, 3,
+                    padding=1, bias=False),
+                nn.BatchNorm2d(detail_channels),
+                nn.ReLU(inplace=True),
+            ])
+        self.detail_stem = nn.Sequential(*detail_stem_layers)
         self.refine = nn.Sequential(
             nn.Conv2d(
                 decoder_channels + detail_channels,
@@ -903,7 +939,8 @@ class SAM2UNetDecoder(nn.Module):
     """Official RFB + U-shaped decoder with two deeply supervised outputs."""
 
     def __init__(self, encoder_channels=(144, 288, 576, 1152), channels=64,
-                 num_classes=1, use_detail_refinement=False):
+                 num_classes=1, use_detail_refinement=False,
+                 use_multiscale_detail=False):
         super().__init__()
         self.use_detail_refinement = use_detail_refinement
         self.rfbs = nn.ModuleList([
@@ -920,6 +957,7 @@ class SAM2UNetDecoder(nn.Module):
                 decoder_channels=channels,
                 detail_channels=32,
                 num_classes=num_classes,
+                use_multiscale_context=use_multiscale_detail,
             )
             if use_detail_refinement else None
         )
@@ -965,7 +1003,7 @@ class MSLAU_net(nn.Module):
         if decoder_mode not in {
                 "legacy", "progressive_wavelet", "cascade_reverse",
                 "p5_hiera_reverse", "p5_sam2unet",
-                "p5_sam2unet_detail"}:
+                "p5_sam2unet_detail", "p5_sam2unet_detail_multiscale"}:
             raise ValueError("Unsupported decoder mode: {}".format(decoder_mode))
         if decoder_mode != "legacy" and fusion_mode != "fixed":
             raise ValueError("Progressive decoders require fusion_mode='fixed'")
@@ -973,11 +1011,12 @@ class MSLAU_net(nn.Module):
             raise ValueError("Unsupported encoder: {}".format(encoder_name))
         if decoder_mode in {
                 "p5_hiera_reverse", "p5_sam2unet",
-                "p5_sam2unet_detail"} and encoder_name != "sam2_hiera_large":
+                "p5_sam2unet_detail", "p5_sam2unet_detail_multiscale"
+        } and encoder_name != "sam2_hiera_large":
             raise ValueError("P5 requires encoder_name='sam2_hiera_large'")
         if encoder_name == "sam2_hiera_large" and decoder_mode not in {
                 "p5_hiera_reverse", "p5_sam2unet",
-                "p5_sam2unet_detail"}:
+                "p5_sam2unet_detail", "p5_sam2unet_detail_multiscale"}:
             raise ValueError("SAM2 Hiera encoder is currently reserved for P5")
         self.img_size = img_size
         self.norm_cfg = None
@@ -1006,7 +1045,8 @@ class MSLAU_net(nn.Module):
                 freeze_backbone=freeze_hiera_backbone,
                 adapter_mode=(
                     "block_prompt" if decoder_mode in {
-                        "p5_sam2unet", "p5_sam2unet_detail"}
+                        "p5_sam2unet", "p5_sam2unet_detail",
+                        "p5_sam2unet_detail_multiscale"}
                     else "stage_output"),
             )
             encoder_channels = self.encoder.out_channels
@@ -1049,11 +1089,16 @@ class MSLAU_net(nn.Module):
                     channels=64,
                     num_classes=num_classes,
                     use_detail_refinement=(
-                        decoder_mode == "p5_sam2unet_detail"),
+                        decoder_mode in {
+                            "p5_sam2unet_detail",
+                            "p5_sam2unet_detail_multiscale"}),
+                    use_multiscale_detail=(
+                        decoder_mode == "p5_sam2unet_detail_multiscale"),
                 )
 
     def enable_p5_detail_only_tuning(self):
-        if self.decoder_mode != "p5_sam2unet_detail":
+        if self.decoder_mode not in {
+                "p5_sam2unet_detail", "p5_sam2unet_detail_multiscale"}:
             raise ValueError(
                 "Detail-only tuning requires decoder_mode='p5_sam2unet_detail'")
         self.requires_grad_(False)
@@ -1095,7 +1140,9 @@ class MSLAU_net(nn.Module):
                     output_size=self.img_size,
                     return_aux=return_aux,
                     normalized_image=(
-                        inputs if self.decoder_mode == "p5_sam2unet_detail"
+                        inputs if self.decoder_mode in {
+                            "p5_sam2unet_detail",
+                            "p5_sam2unet_detail_multiscale"}
                         else None),
                 )
             if return_features:
