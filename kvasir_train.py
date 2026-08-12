@@ -450,6 +450,17 @@ if __name__ == "__main__":
         default=None,
         help="local pretrained SAM2 Hiera checkpoint used to initialize P5",
     )
+    parser.add_argument(
+        "--init_checkpoint",
+        type=str,
+        default=None,
+        help="complete model checkpoint used to initialize a training run",
+    )
+    parser.add_argument(
+        "--p5_detail_only",
+        action="store_true",
+        help="freeze a loaded P5.1 base and train only P5.2 detail refinement",
+    )
     parser.add_argument("--progressive_channels", type=int, default=96,
                         help="feature channels in the P3 progressive decoder")
     parser.add_argument("--disable_p3_wavelet_edge", action="store_true",
@@ -613,7 +624,43 @@ if __name__ == "__main__":
             model.decoder_mode == "p5_sam2unet_detail",
             args.aux_d2_weight, args.aux_d3_weight,
         )
-    if args.encoder_name == "mslau":
+    if args.p5_detail_only:
+        if model.decoder_mode != "p5_sam2unet_detail":
+            raise ValueError("--p5_detail_only requires p5_sam2unet_detail")
+        if not args.init_checkpoint:
+            raise ValueError("--p5_detail_only requires --init_checkpoint")
+        if any(weight != 0 for weight in (
+                args.aux_d1_weight, args.aux_d2_weight,
+                args.aux_d3_weight, args.boundary_weight)):
+            raise ValueError(
+                "Detail-only tuning uses main supervision only; set all aux weights to 0")
+    if args.init_checkpoint:
+        init_checkpoint = resolve_path(args.init_checkpoint)
+        if not os.path.exists(init_checkpoint):
+            raise FileNotFoundError(
+                "Initial model checkpoint not found: {}".format(init_checkpoint))
+        checkpoint_state = torch.load(
+            init_checkpoint, map_location="cpu", weights_only=False)
+        checkpoint_state = checkpoint_state.get("state_dict", checkpoint_state)
+        checkpoint_state = checkpoint_state.get("model", checkpoint_state)
+        load_result = model.load_state_dict(
+            checkpoint_state, strict=not args.p5_detail_only)
+        if args.p5_detail_only:
+            expected_prefix = "progressive_decoder.detail_refinement."
+            if load_result.unexpected_keys or not load_result.missing_keys or any(
+                    not key.startswith(expected_prefix)
+                    for key in load_result.missing_keys):
+                raise RuntimeError(
+                    "P5.1 checkpoint mismatch for detail-only tuning: {}".format(
+                        load_result))
+            model.enable_p5_detail_only_tuning()
+        logging.info(
+            "Initialized complete model from %s: missing=%d unexpected=%d "
+            "detail_only=%s",
+            init_checkpoint, len(load_result.missing_keys),
+            len(load_result.unexpected_keys), args.p5_detail_only,
+        )
+    if args.encoder_name == "mslau" and not args.init_checkpoint:
         load_encoder_pretrained(model, args.pretrained)
     elif args.pretrained:
         raise ValueError("--pretrained is only valid for the original MSLAU encoder")
@@ -670,13 +717,33 @@ if __name__ == "__main__":
         if torch.cuda.is_available():
             distiller = distiller.cuda()
     fusion_logits = getattr(model.conv_mla, "fusion_logits", None)
-    if model.decoder_mode != "legacy":
+    if args.p5_detail_only:
+        detail_params = [
+            param for name, param in model.named_parameters()
+            if name.startswith("progressive_decoder.detail_refinement.")
+            and param.requires_grad
+        ]
+        if not detail_params:
+            raise RuntimeError("No trainable P5 detail parameters were found")
+        parameter_groups = [{
+            "params": detail_params,
+            "lr": args.decoder_lr,
+            "name": "p5_detail_refinement",
+        }]
+        logging.info(
+            "Parameters: total=%d trainable=%d detail_trainable=%d",
+            sum(param.numel() for param in model.parameters()),
+            sum(param.numel() for param in model.parameters() if param.requires_grad),
+            sum(param.numel() for param in detail_params),
+        )
+        optimizer = optim.AdamW(parameter_groups, weight_decay=5e-4)
+    elif model.decoder_mode != "legacy":
         encoder_params = [
             param for param in model.encoder.parameters() if param.requires_grad
         ]
         decoder_params = [
             param for name, param in model.named_parameters()
-            if not name.startswith("encoder.")
+            if not name.startswith("encoder.") and param.requires_grad
         ]
         parameter_groups = [
             {"params": encoder_params, "lr": args.encoder_lr,

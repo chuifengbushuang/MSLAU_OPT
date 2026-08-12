@@ -991,6 +991,7 @@ class MSLAU_net(nn.Module):
         self.decoder_mode = decoder_mode
         self.encoder_name = encoder_name
         self.decoder_dropout = nn.Dropout2d(p=decoder_dropout)
+        self.detail_only_tuning = False
 
         if encoder_name == "mslau":
             encoder_channels = (64, 128, 256, 512)
@@ -1050,6 +1051,29 @@ class MSLAU_net(nn.Module):
                     use_detail_refinement=(
                         decoder_mode == "p5_sam2unet_detail"),
                 )
+
+    def enable_p5_detail_only_tuning(self):
+        if self.decoder_mode != "p5_sam2unet_detail":
+            raise ValueError(
+                "Detail-only tuning requires decoder_mode='p5_sam2unet_detail'")
+        self.requires_grad_(False)
+        self.progressive_decoder.detail_refinement.requires_grad_(True)
+        self.detail_only_tuning = True
+        self._keep_p5_base_eval()
+
+    def _keep_p5_base_eval(self):
+        if not self.detail_only_tuning:
+            return
+        self.encoder.eval()
+        for name in ("rfbs", "up1", "up2", "up3", "side1", "side2", "head"):
+            getattr(self.progressive_decoder, name).eval()
+
+    def train(self, mode=True):
+        super().train(mode)
+        if self.detail_only_tuning:
+            self._keep_p5_base_eval()
+            self.progressive_decoder.detail_refinement.train(mode)
+        return self
 
     def forward(self, inputs, return_aux=False, return_features=False):
         edge_inputs = inputs
