@@ -510,7 +510,10 @@ GitHub 远程仓库：`chuifengbushuang/MSLAU_OPT`。zsy 已配置 GitHub SSH �
 - 具体操作：新增`--init_checkpoint`与`--p5_detail_only`；加载P5.1完整state_dict时只允许缺失新增detail键，然后冻结Hiera、block Adapter、RFB、U形decoder及原heads，只训练`detail_refinement`。训练阶段强制66个公共BatchNorm保持eval，避免running statistics改变；只使用main structure loss，所有aux权重为0。
 - 验证：初始化输出与P5.1逐元素相等，最大差0；仅102689/216521732参数可训练；冻结参数梯度为0，detail delta首步有梯度、stem第二步有梯度；两步后公共BN统计完全不变；峰值显存约1.89GiB。代码提交`5b6e883`。
 - 控制变量：Kvasir 880/120、seed1234、352、batch12、num_workers8、structure loss；detail LR5e-4、AdamW、cosine、10 epoch；初始化checkpoint为P5.1 `best_iou_0.878616_epoch_17_0.304569.pth`。
-- 正式运行：GPU0、PID`1588669`；run目录`/data/models/zsy/mslau-net/runs/kvasir_p52_frozen_p51_detailonly_lr5e4_structure_mainonly_352_b12_e10_seed1234_gpu0_nw8_20260812_0501`。Epoch0 train/val IoU为0.9027/0.8787，已成功保存首个best checkpoint并进入Epoch1；显存约2.86GiB、GPU利用率约98%。
+- 正式结果：5m19s完成，best val IoU **0.879866@2**，对应MainLoss0.304816；best MainLoss0.303809@5，对应IoU0.879116。独立复评mIoU0.879864、Dice0.9298、Precision0.9242、Recall0.9426、Accuracy0.9823、FPS34.23；比P5.1提高0.001249。
+- 面积与逐图：四面积组为0.800614/0.901050/0.909747/0.908045，相对P5.1为+0.002769/+0.003513/+0.001851/-0.003137；预测面积/GT从0.993669降到0.983675。相对P5.1胜65、负55、中位差+0.000196，无任何样本变化超过±0.05；IoU<0.5样本从3降到2。
+- 结论：冻结式二阶段训练避免主体退化并获得安全但很小的总体提升，最大组下降仍在预设0.005容忍内；但最小组0.800614未达到0.810门槛，且只有一个seed，因此不升级为新主模型、不直接补三seed。保留该checkpoint作为后续选择性细节融合的初始化候选。
+- 证据：run目录`/data/models/zsy/mslau-net/runs/kvasir_p52_frozen_p51_detailonly_lr5e4_structure_mainonly_352_b12_e10_seed1234_gpu0_nw8_20260812_0501`；best checkpoint为`checkpoints/best_iou_0.879866_epoch_2_0.304816.pth`。
 
 ## 9. 后续每次追加记录的模板
 
