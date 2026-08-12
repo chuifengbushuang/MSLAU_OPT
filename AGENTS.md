@@ -3,7 +3,7 @@
 > 本文件是 Codex 的长期项目记忆。每次代码修改或实验完成后都必须更新。
 > 本文件位于 Git 仓库根目录，是 Mac、`.120`、`.194` 三端同步时的唯一权威版本。
 > `handover.md` 仅用于一次性交接本轮对话，不替代本文件。
-> 最近更新：2026-08-11。
+> 最近更新：2026-08-12。
 
 ## 1. 长期目标
 
@@ -199,7 +199,8 @@ split：/home/zsy/projects/mslau-net/configs/splits/cvc_official_csv_fold0
 
 | 模型 | 最佳 val mIoU | Epoch | 结论 |
 |---|---:|---:|---|
-| P3 reverse-only（无wavelet edge） | **0.859864±0.010269**（best 0.871511） | 39/82/57 | 当前三seed最高均值；2/3 seed提升 |
+| P5.1 官方式 SAM2-UNet | **0.872802±0.005118**（best 0.878616） | 10/17/9 | 当前三seed最高均值；3/3 seed超过P3 |
+| P3 reverse-only（无wavelet edge） | 0.859864±0.010269（best 0.871511） | 39/82/57 | 上一代主模型；2/3 seed超过P0 |
 | P3 reverse-only + 352（seed1234） | 0.860625 | 20 | 比同seed 256低0.010886；停止放大输入 |
 | P4 cascade + Lovasz + DINOv2（seed1234） | 0.862562 | 139 | Precision升、Recall明显降；未超过P3 |
 | P4 no-final-reverse（seed1234） | 0.860338 | 52 | Recall恢复但假阳性增多；P4路线暂停 |
@@ -482,8 +483,12 @@ GitHub 远程仓库：`chuifengbushuang/MSLAU_OPT`。zsy 已配置 GitHub SSH �
 - Loss与训练：加入官方structure loss（边界加权BCE+加权IoU），三路输出等权；Kvasir 880/120、352、batch12、num_workers8、AdamW LR1e-3、weight decay5e-4、cosine、20 epochs、seed1234。数据划分保持不变，但仍使用本项目现有增强。
 - 可靠性修复：训练改为每次刷新best val IoU时，把CPU state_dict原子写入固定checkpoint，避免中断后没有权重；训练结束仍生成带指标的best loss/best IoU文件。
 - 验证：语法与diff检查通过；旧P3 0.871511 checkpoint strict加载通过；官方Hiera权重严格加载；随机batch12与真实Kvasir batch12前后向通过。总参数216419043、可训练4269747，其中block Adapter 1714416；Hiera原参数无梯度，Adapter和decoder梯度非零；batch12峰值显存约14.32GiB。
-- 正式运行：GPU0，PID`1041618`；run目录`/data/models/zsy/mslau-net/runs/kvasir_p5a_sam2unet_hiera_l_blockadapter32_rfb64_structure_352_b12_e20_seed1234_gpu0_nw8_20260811_0906`。Epoch0/1/2 val IoU为0.7077/0.7829/0.8133，运行中best checkpoint已连续成功原子更新（866111534 bytes），已进入Epoch3。
-- 当前结论：链路与运行中保存均已验证，尚无最终性能结论；仍以同seed P3 0.871511为刷新门槛。分支`kvasir-p5-sam2unet-official-adapter`，代码提交`6602594`。
+- seed1234结果：21m24s完成，best val IoU **0.878616@17**，Dice0.9290、Precision0.9199、Recall0.9461、Accuracy0.9824、FPS35.64；最终train/val为0.9062/0.8766。相对同seed P3提高0.007105，相对P0提高0.018033。
+- seed42/2026补跑：分别为 **0.868977@10** 和 **0.870813@9**；独立复评Dice为0.9210/0.9256，Precision为0.9234/0.9280，Recall为0.9384/0.9356。两组训练均完整结束且checkpoint可严格加载。
+- 三seed统计：seed42/1234/2026为0.868977/0.878616/0.870813，均值 **0.872802±0.005118**；相对P3三seed配对提高+0.013008/+0.007105/+0.018701，平均提高0.012938且3/3 seed提升；相对P0平均提高0.019798。三seed平均Dice0.9252、Precision0.9238、Recall0.9400，收益主要来自缓解P3欠分割。
+- 面积分组：P5.1三seed从最小到最大GT面积四分位IoU为0.800657/0.895469/0.907776/0.887301；相对P3分别为+0.002680/+0.010673/+0.007913/+0.030481。小目标绝对值最低且提升最小，下一步应补高分辨率局部细节，但不能破坏中大目标与全局结构收益。
+- 证据：seed1234 run目录`/data/models/zsy/mslau-net/runs/kvasir_p5a_sam2unet_hiera_l_blockadapter32_rfb64_structure_352_b12_e20_seed1234_gpu0_nw8_20260811_0906`，最佳checkpoint为`checkpoints/best_iou_0.878616_epoch_17_0.304569.pth`；seed42/2026 run目录后缀分别为`seed42_gpu0_nw8_20260811_0941`和`seed2026_gpu1_nw8_20260811_0941`。
+- 结论：P5.1已替代P3成为当前Kvasir主模型；分支`kvasir-p5-sam2unet-official-adapter`，核心代码提交`6602594`。后续以P5.1为冻结基线，新分支单变量改善小息肉。
 
 ## 9. 后续每次追加记录的模板
 
@@ -501,11 +506,11 @@ GitHub 远程仓库：`chuifengbushuang/MSLAU_OPT`。zsy 已配置 GitHub SSH �
 
 ## 10. 下一步优先级
 
-1. **完成P5.1官方式SAM2-UNet基准**：当前唯一性能主实验；完整20 epoch后以同seedP3 0.871511为门槛，先判断Hiera路线本身是否成立。
-2. **依据P5.1结果决策**：若达到约0.86以上，再做“内部block Adapter + P3 decoder”的单变量混合；若明显低于0.86，停止SAM2路线，转向BAMPolyp或困难样本稳健优化。
-3. **停止旧失败路线**：不再补P3-352、不继续P4 cascade/no-final-reverse，也不继续固定0.1 DINOv2蒸馏或简单Lovasz叠加。
-4. **锁定reverse-only主候选**：保留P3分支、tag、三个checkpoint，不恢复wavelet edge；P0继续作为历史基线。
-5. **更强证据**：论文级结论建议再加2个预注册seed或建立独立test；当前P3 n=3均值提升0.006860但配对结果含1次下降，不做显著性夸大。
+1. **P5.2小目标主线**：以冻结的P5.1为基线，先分别做“aux D2/D3权重1.0/0.5/0.25”和“H/2零初始化RGB细节残差分支”两个seed1234单变量实验；有效后才组合并补三seed。
+2. **预注册判断标准**：最小面积四分位至少从0.800657提高到0.810；总体三seed均值不低于0.872802，Precision不低于0.919、Recall不低于0.935，最大面积组下降不超过0.005。
+3. **保持单变量**：第一版细节分支不加入reverse、wavelet、手工边缘、Dropout或新Loss；如轮廓仍差，再单独增加训练期boundary head，权重0.05且不参与乘性门控。
+4. **停止旧失败路线**：不再补P3-352、不继续P4 cascade/no-final-reverse，也不继续固定0.1 DINOv2蒸馏或简单Lovasz叠加；P3/P0保留为历史基线。
+5. **更强证据**：最终方案必须补seed42/2026或建立独立test；不在同一val上反复调阈值。
 6. **复现 CVC 历史0.90**：官方CSV/fold0、clean P0、batch8、纯Dice、最高IoU保存；只改变旧训练参数。
 7. **严格 CVC 提升**：新增完整模型`--init_checkpoint`，从Kvasir 0.860583 P0初始化；先冻结encoder，再以encoder 1e-5、decoder 1e-4微调；采用sequence-level五折。
 8. **LFF**：停止只调LR/Dropout；如重启，先完成特征幅值统计。
