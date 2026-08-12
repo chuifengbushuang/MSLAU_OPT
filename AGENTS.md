@@ -490,6 +490,17 @@ GitHub 远程仓库：`chuifengbushuang/MSLAU_OPT`。zsy 已配置 GitHub SSH �
 - 证据：seed1234 run目录`/data/models/zsy/mslau-net/runs/kvasir_p5a_sam2unet_hiera_l_blockadapter32_rfb64_structure_352_b12_e20_seed1234_gpu0_nw8_20260811_0906`，最佳checkpoint为`checkpoints/best_iou_0.878616_epoch_17_0.304569.pth`；seed42/2026 run目录后缀分别为`seed42_gpu0_nw8_20260811_0941`和`seed2026_gpu1_nw8_20260811_0941`。
 - 结论：P5.1已替代P3成为当前Kvasir主模型；分支`kvasir-p5-sam2unet-official-adapter`，核心代码提交`6602594`。后续以P5.1为冻结基线，新分支单变量改善小息肉。
 
+### 2026-08-12：P5.2小息肉单变量实验启动
+
+- 诊断：P5.1三seed最小到最大面积四分位IoU为0.800657/0.895469/0.907776/0.887301；小目标绝对精度最低。352输入下Hiera四级特征为88/44/22/11，主头在88分辨率预测后直接上采样；同时D2/D3粗尺度监督与main等权，二者均可能限制细小轮廓。
+- 实验A：保持P5.1结构完全不变，只把main/D2/D3监督权重从1.0/1.0/1.0改成1.0/0.5/0.25，测试粗尺度等权监督是否压制小目标。
+- 实验B：新增独立`p5_sam2unet_detail`模式；归一化RGB经两层卷积保留H/2细节，和上采样D1融合后生成局部`delta_logits`，以残差方式加到原P5.1 logits；delta head零初始化，不加入reverse、wavelet、手工边缘、Dropout或新Loss，D2/D3仍保持1.0/1.0。
+- 兼容性：原`p5_sam2unet`路径和state_dict键不变，0.878616 checkpoint strict加载通过；新模式加载相同公共权重后零初始化输出与P5.1逐元素相等，最大差0。第二优化步detail stem梯度非零，冻结Hiera无梯度；batch12前后向峰值约14.69GiB。
+- 代码：分支`kvasir-p5.2-small-polyp-detail`，提交`02fe10d`；总参数216521732、可训练4372436，仅比P5.1增加102689个可训练参数。
+- 控制变量：两组均Kvasir 880/120、seed1234、352、batch12、num_workers8、structure loss、AdamW、Adapter/decoder LR1e-3、cosine、20 epoch；除指定变量外与P5.1一致。
+- 正式运行：实验A在GPU0、PID`1392561`，run目录`/data/models/zsy/mslau-net/runs/kvasir_p51_aux050_025_sam2unet_hiera_l_structure_352_b12_e20_seed1234_gpu0_nw8_20260812_0151`，Epoch0 train/val IoU为0.6357/0.7363；实验B在GPU1、PID`1392562`，run目录`/data/models/zsy/mslau-net/runs/kvasir_p52_h2_detail_sam2unet_hiera_l_structure_aux100_100_352_b12_e20_seed1234_gpu1_nw8_20260812_0151`，Epoch0 train/val IoU为0.6514/0.7726。两组均已原子保存首个best checkpoint并进入Epoch1。
+- 后续判断：训练结束后先比较总体mIoU和四面积组；只有单变量至少保持总体且明显改善最小组，才组合A+B并补seed42/2026。
+
 ## 9. 后续每次追加记录的模板
 
 ```markdown
