@@ -435,7 +435,7 @@ if __name__ == "__main__":
         default="legacy",
         choices=[
             "legacy", "progressive_wavelet", "cascade_reverse",
-            "p5_hiera_reverse", "p5_sam2unet"],
+            "p5_hiera_reverse", "p5_sam2unet", "p5_sam2unet_detail"],
         help="legacy, P3/P4, legacy P5 hybrid, or official-style SAM2-UNet",
     )
     parser.add_argument(
@@ -598,7 +598,7 @@ if __name__ == "__main__":
             model.encoder.freeze_backbone, args.progressive_channels,
             args.aux_d2_weight, args.aux_d3_weight, args.boundary_weight,
         )
-    elif model.decoder_mode == "p5_sam2unet":
+    elif model.decoder_mode in {"p5_sam2unet", "p5_sam2unet_detail"}:
         if not args.hiera_checkpoint:
             raise ValueError("P5 SAM2-UNet requires --hiera_checkpoint")
         if not os.path.exists(resolve_path(args.hiera_checkpoint)):
@@ -607,8 +607,10 @@ if __name__ == "__main__":
                     resolve_path(args.hiera_checkpoint)))
         logging.info(
             "P5 SAM2-UNet configuration: adapter=block_prompt bottleneck=32 "
-            "backbone_frozen=%s rfb_channels=64 aux_d2=%.3f aux_d3=%.3f",
+            "backbone_frozen=%s rfb_channels=64 detail_refinement=%s "
+            "aux_d2=%.3f aux_d3=%.3f",
             model.encoder.freeze_backbone,
+            model.decoder_mode == "p5_sam2unet_detail",
             args.aux_d2_weight, args.aux_d3_weight,
         )
     if args.encoder_name == "mslau":

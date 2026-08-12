@@ -855,12 +855,57 @@ class SAM2UNetUp(nn.Module):
         return self.conv(torch.cat([skip, decoder], dim=1))
 
 
+class SAM2UNetDetailRefinement(nn.Module):
+    """Half-resolution RGB detail branch that predicts a residual mask correction."""
+
+    def __init__(self, decoder_channels=64, detail_channels=32, num_classes=1):
+        super().__init__()
+        self.detail_stem = nn.Sequential(
+            nn.Conv2d(3, detail_channels, 3, stride=2, padding=1, bias=False),
+            nn.BatchNorm2d(detail_channels),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(detail_channels, detail_channels, 3, padding=1, bias=False),
+            nn.BatchNorm2d(detail_channels),
+            nn.ReLU(inplace=True),
+        )
+        self.refine = nn.Sequential(
+            nn.Conv2d(
+                decoder_channels + detail_channels,
+                decoder_channels,
+                3,
+                padding=1,
+                bias=False,
+            ),
+            nn.BatchNorm2d(decoder_channels),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(
+                decoder_channels, decoder_channels, 3, padding=1, bias=False),
+            nn.BatchNorm2d(decoder_channels),
+            nn.ReLU(inplace=True),
+        )
+        self.delta_head = nn.Conv2d(decoder_channels, num_classes, 1)
+        nn.init.zeros_(self.delta_head.weight)
+        nn.init.zeros_(self.delta_head.bias)
+
+    def forward(self, decoder_feature, normalized_image):
+        detail = self.detail_stem(normalized_image)
+        decoder_feature = F.interpolate(
+            decoder_feature,
+            size=detail.shape[-2:],
+            mode="bilinear",
+            align_corners=False,
+        )
+        return self.delta_head(
+            self.refine(torch.cat([decoder_feature, detail], dim=1)))
+
+
 class SAM2UNetDecoder(nn.Module):
     """Official RFB + U-shaped decoder with two deeply supervised outputs."""
 
     def __init__(self, encoder_channels=(144, 288, 576, 1152), channels=64,
-                 num_classes=1):
+                 num_classes=1, use_detail_refinement=False):
         super().__init__()
+        self.use_detail_refinement = use_detail_refinement
         self.rfbs = nn.ModuleList([
             RFBModified(in_channels, channels) for in_channels in encoder_channels
         ])
@@ -870,6 +915,14 @@ class SAM2UNetDecoder(nn.Module):
         self.side1 = nn.Conv2d(channels, num_classes, 1)
         self.side2 = nn.Conv2d(channels, num_classes, 1)
         self.head = nn.Conv2d(channels, num_classes, 1)
+        self.detail_refinement = (
+            SAM2UNetDetailRefinement(
+                decoder_channels=channels,
+                detail_channels=32,
+                num_classes=num_classes,
+            )
+            if use_detail_refinement else None
+        )
 
     @staticmethod
     def resize_logits(logits, output_size):
@@ -877,7 +930,8 @@ class SAM2UNetDecoder(nn.Module):
             logits, size=(output_size, output_size),
             mode="bilinear", align_corners=False)
 
-    def forward(self, encoder_features, output_size, return_aux=False):
+    def forward(self, encoder_features, output_size, return_aux=False,
+                normalized_image=None):
         e1, e2, e3, e4 = [
             rfb(feature) for rfb, feature in zip(self.rfbs, encoder_features)
         ]
@@ -885,6 +939,11 @@ class SAM2UNetDecoder(nn.Module):
         d2 = self.up2(d3, e2)
         d1 = self.up3(d2, e1)
         logits = self.resize_logits(self.head(d1), output_size)
+        if self.detail_refinement is not None:
+            if normalized_image is None:
+                raise ValueError("Detail refinement requires the normalized RGB image")
+            delta_logits = self.detail_refinement(d1, normalized_image)
+            logits = logits + self.resize_logits(delta_logits, output_size)
         if not return_aux:
             return logits
         return {
@@ -905,16 +964,20 @@ class MSLAU_net(nn.Module):
         super(MSLAU_net, self).__init__()
         if decoder_mode not in {
                 "legacy", "progressive_wavelet", "cascade_reverse",
-                "p5_hiera_reverse", "p5_sam2unet"}:
+                "p5_hiera_reverse", "p5_sam2unet",
+                "p5_sam2unet_detail"}:
             raise ValueError("Unsupported decoder mode: {}".format(decoder_mode))
         if decoder_mode != "legacy" and fusion_mode != "fixed":
             raise ValueError("Progressive decoders require fusion_mode='fixed'")
         if encoder_name not in {"mslau", "sam2_hiera_large"}:
             raise ValueError("Unsupported encoder: {}".format(encoder_name))
-        if decoder_mode in {"p5_hiera_reverse", "p5_sam2unet"} and encoder_name != "sam2_hiera_large":
+        if decoder_mode in {
+                "p5_hiera_reverse", "p5_sam2unet",
+                "p5_sam2unet_detail"} and encoder_name != "sam2_hiera_large":
             raise ValueError("P5 requires encoder_name='sam2_hiera_large'")
         if encoder_name == "sam2_hiera_large" and decoder_mode not in {
-                "p5_hiera_reverse", "p5_sam2unet"}:
+                "p5_hiera_reverse", "p5_sam2unet",
+                "p5_sam2unet_detail"}:
             raise ValueError("SAM2 Hiera encoder is currently reserved for P5")
         self.img_size = img_size
         self.norm_cfg = None
@@ -941,7 +1004,8 @@ class MSLAU_net(nn.Module):
                 checkpoint_path=hiera_checkpoint,
                 freeze_backbone=freeze_hiera_backbone,
                 adapter_mode=(
-                    "block_prompt" if decoder_mode == "p5_sam2unet"
+                    "block_prompt" if decoder_mode in {
+                        "p5_sam2unet", "p5_sam2unet_detail"}
                     else "stage_output"),
             )
             encoder_channels = self.encoder.out_channels
@@ -983,6 +1047,8 @@ class MSLAU_net(nn.Module):
                     encoder_channels=encoder_channels,
                     channels=64,
                     num_classes=num_classes,
+                    use_detail_refinement=(
+                        decoder_mode == "p5_sam2unet_detail"),
                 )
 
     def forward(self, inputs, return_aux=False, return_features=False):
@@ -1004,6 +1070,9 @@ class MSLAU_net(nn.Module):
                     encoder_features,
                     output_size=self.img_size,
                     return_aux=return_aux,
+                    normalized_image=(
+                        inputs if self.decoder_mode == "p5_sam2unet_detail"
+                        else None),
                 )
             if return_features:
                 if not isinstance(outputs, dict):
