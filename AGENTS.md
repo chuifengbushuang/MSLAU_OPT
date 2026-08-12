@@ -499,7 +499,18 @@ GitHub 远程仓库：`chuifengbushuang/MSLAU_OPT`。zsy 已配置 GitHub SSH �
 - 代码：分支`kvasir-p5.2-small-polyp-detail`，提交`02fe10d`；总参数216521732、可训练4372436，仅比P5.1增加102689个可训练参数。
 - 控制变量：两组均Kvasir 880/120、seed1234、352、batch12、num_workers8、structure loss、AdamW、Adapter/decoder LR1e-3、cosine、20 epoch；除指定变量外与P5.1一致。
 - 正式运行：实验A在GPU0、PID`1392561`，run目录`/data/models/zsy/mslau-net/runs/kvasir_p51_aux050_025_sam2unet_hiera_l_structure_352_b12_e20_seed1234_gpu0_nw8_20260812_0151`，Epoch0 train/val IoU为0.6357/0.7363；实验B在GPU1、PID`1392562`，run目录`/data/models/zsy/mslau-net/runs/kvasir_p52_h2_detail_sam2unet_hiera_l_structure_aux100_100_352_b12_e20_seed1234_gpu1_nw8_20260812_0151`，Epoch0 train/val IoU为0.6514/0.7726。两组均已原子保存首个best checkpoint并进入Epoch1。
-- 后续判断：训练结束后先比较总体mIoU和四面积组；只有单变量至少保持总体且明显改善最小组，才组合A+B并补seed42/2026。
+- 实验A结果：best IoU **0.869461@17**，Dice0.9205、Precision0.9189、Recall0.9360；比P5.1低0.009155。四面积组为0.772329/0.904611/0.911619/0.889290，最小和最大组分别下降0.025516/0.021892；降低粗尺度辅助权重被否定，不与其他方案组合。
+- 实验B结果：best IoU **0.869534@19**，Dice0.9239、Precision0.9173、Recall0.9461；比P5.1低0.009082。四面积组为0.805620/0.880089/0.900441/0.891983，小目标提高0.007775但其余三组下降。
+- 实验B机制：在同checkpoint内关闭detail residual后IoU仅0.862777；开启residual贡献+0.006757，四面积组分别贡献+0.014794/+0.003366/+0.007254/+0.001613，95张提升、25张下降。说明细节分支有效，但联合从头训练把公共P5.1主体训练差；零初始化只等价于同随机初始化模型，并没有从已训练0.878616基线开始。
+- 互补上限诊断：同一val上用`0.7*P5.1 logits+0.3*实验B logits`得到0.884840，最小组0.814581；该系数是在val上诊断且推理成本翻倍，不能作为正式结果，只证明两模型误差互补。
+
+### 2026-08-12：P5.2冻结P5.1的二阶段细节微调
+
+- 假设：加载已训练P5.1并严格冻结公共主体，只让H/2细节分支学习增量修正，可保留0.878616全局能力并吸收实验B的小目标收益。
+- 具体操作：新增`--init_checkpoint`与`--p5_detail_only`；加载P5.1完整state_dict时只允许缺失新增detail键，然后冻结Hiera、block Adapter、RFB、U形decoder及原heads，只训练`detail_refinement`。训练阶段强制66个公共BatchNorm保持eval，避免running statistics改变；只使用main structure loss，所有aux权重为0。
+- 验证：初始化输出与P5.1逐元素相等，最大差0；仅102689/216521732参数可训练；冻结参数梯度为0，detail delta首步有梯度、stem第二步有梯度；两步后公共BN统计完全不变；峰值显存约1.89GiB。代码提交`5b6e883`。
+- 控制变量：Kvasir 880/120、seed1234、352、batch12、num_workers8、structure loss；detail LR5e-4、AdamW、cosine、10 epoch；初始化checkpoint为P5.1 `best_iou_0.878616_epoch_17_0.304569.pth`。
+- 正式运行：GPU0、PID`1588669`；run目录`/data/models/zsy/mslau-net/runs/kvasir_p52_frozen_p51_detailonly_lr5e4_structure_mainonly_352_b12_e10_seed1234_gpu0_nw8_20260812_0501`。Epoch0 train/val IoU为0.9027/0.8787，已成功保存首个best checkpoint并进入Epoch1；显存约2.86GiB、GPU利用率约98%。
 
 ## 9. 后续每次追加记录的模板
 
