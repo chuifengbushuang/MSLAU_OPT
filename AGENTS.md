@@ -200,6 +200,10 @@ split：/home/zsy/projects/mslau-net/configs/splits/cvc_official_csv_fold0
 | 模型 | 最佳 val mIoU | Epoch | 结论 |
 |---|---:|---:|---|
 | P5.1 官方式 SAM2-UNet | **0.872802±0.005118**（best 0.878616） | 10/17/9 | 当前三seed最高均值；3/3 seed超过P3 |
+| P5.2 冻结P5.1细节微调（seed1234） | 0.879864 | 2 | 当前单seed最高；安全小幅提升，但小目标未达门槛 |
+| P5.3 面积尺度门控细节（seed1234） | 0.879664 | 7 | 比P5.1高0.001048；保护大目标但未超过P5.2 |
+| P5.3b 面积加权细节Loss（seed1234） | 0.879354 | 4 | 比P5.1高0.000738；小目标收益反而小于P5.2 |
+| P5.4 多尺度细节适配器（seed1234） | 0.878877 | 1 | 比P5.1仅高0.000261；小目标与总体均弱于P5.2 |
 | P3 reverse-only（无wavelet edge） | 0.859864±0.010269（best 0.871511） | 39/82/57 | 上一代主模型；2/3 seed超过P0 |
 | P3 reverse-only + 352（seed1234） | 0.860625 | 20 | 比同seed 256低0.010886；停止放大输入 |
 | P4 cascade + Lovasz + DINOv2（seed1234） | 0.862562 | 139 | Precision升、Recall明显降；未超过P3 |
@@ -515,6 +519,44 @@ GitHub 远程仓库：`chuifengbushuang/MSLAU_OPT`。zsy 已配置 GitHub SSH �
 - 结论：冻结式二阶段训练避免主体退化并获得安全但很小的总体提升，最大组下降仍在预设0.005容忍内；但最小组0.800614未达到0.810门槛，且只有一个seed，因此不升级为新主模型、不直接补三seed。保留该checkpoint作为后续选择性细节融合的初始化候选。
 - 证据：run目录`/data/models/zsy/mslau-net/runs/kvasir_p52_frozen_p51_detailonly_lr5e4_structure_mainonly_352_b12_e10_seed1234_gpu0_nw8_20260812_0501`；best checkpoint为`checkpoints/best_iou_0.879866_epoch_2_0.304816.pth`。
 
+### 2026-08-12：P5.3训练集面积标定的尺度门控细节残差
+
+- 假设：P5.2细节残差改善前三个面积组、但使最大目标组下降0.003137；根据P5.1预测目标面积衰减大目标的残差强度，可保留小目标细节收益并保护大目标。
+- 具体操作：新增独立`p5_sam2unet_detail_gated`模式；最终logits为`base_logits + g_size * delta_logits`，其中`g_size=clamp(tau/mean(sigmoid(base_logits.detach())), min_gate, 1)`。门控不向冻结主体传播梯度；`tau`和`min_gate`注册为buffer并随checkpoint保存。
+- 门控标定：只在880张训练集上用P5.1确定预测面积分布，Q10/Q25/Q50/Q75/Q90为0.036778/0.063970/0.119813/0.219583/0.325630；预注册`tau=0.064`、`min_gate=0.25`。验证集实际gate的min/Q25/Q50/Q75/max为0.25/0.3092/0.5404/1/1。
+- 控制变量：从P5.1 seed1234 best checkpoint初始化并冻结公共主体与66个公共BN；只训练102689个H/2细节参数；Kvasir 880/120、352、batch12、num_workers8、structure main loss、detail LR5e-4 cosine、10 epoch、seed1234，与P5.2冻结实验一致。
+- 验证：`git diff --check`、`py_compile`、CLI检查通过；零初始化输出与P5.1最大绝对差为0；两步反向后delta head与detail stem梯度非零，公共主体无梯度；完整训练与独立checkpoint复评通过。
+- 结果：5m33s完成，best val IoU **0.879665@7**，独立复评0.879664；Dice0.9296、Precision0.9220、Recall0.9444、Accuracy0.9825、FPS34.02。比P5.1提高0.001048，但比无门控P5.2低0.000200，未刷新单seed最高。
+- 面积机制：四组IoU为0.799940/0.900256/0.908221/0.910238，相对冻结P5.1为+0.002090/+0.002724/+0.000325/-0.000947。相比P5.2，最大组退化从-0.003137收窄到-0.000947，说明保护大目标有效；但最小组提升从+0.002769减至+0.002090，仍未达到0.810预设门槛。
+- 逐图与面积：相对P5.1胜64、负56、中位差+0.000069；预测面积/GT从0.993669变为0.989338；IoU<0.5从3张降到2张，IoU<0.7仍为7张。门控改善分组取舍，但总体增益小且未超过P5.2，不补其他seed。
+- 结论：尺度先验的方向得到部分支持，但固定图像级门控过度衰减了部分有益修正。下一步按单变量原则测试P5.3b：回到无门控P5.2结构，从P5.1初始化，只对detail-only structure loss加入温和的训练集GT面积权重；不与本门控立即组合。
+- 证据：分支`kvasir-p5.3-size-gated-detail`，代码提交`1a81841`；run目录`/data/models/zsy/mslau-net/runs/kvasir_p53_sizegate_tau0064_min025_frozen_p51_detailonly_lr5e4_structure_352_b12_e10_seed1234_gpu0_nw8_20260812_0640`；best checkpoint为`checkpoints/best_iou_0.879665_epoch_7_0.303059.pth`。
+
+### 2026-08-12：P5.3b训练集GT面积加权的细节Loss
+
+- 假设：P5.2只训练细节分支时，大目标样本仍主导梯度；在不改变推理结构的前提下温和提高小目标structure loss，可增强最小面积组且保留P5.1主体。
+- 具体操作：为`StructureLoss_binary`增加逐图loss接口，默认forward仍为逐图均值；只在detail-only训练阶段使用`w=1+alpha*clamp((tau-GT_area)/tau,0,1)`，并在每个batch内把权重归一化到均值1。验证阶段仍使用原始未加权structure loss。
+- 标定：880张训练集352掩码面积Q10/Q25/Q50/Q75/Q90为0.036661/0.062548/0.117648/0.215768/0.323517；固定`tau=0.0625`、`alpha=0.5`，最大原始权重1.5。训练集中164张面积<0.05、375张<0.10。
+- 控制变量：使用无门控`p5_sam2unet_detail`，从P5.1 seed1234 best初始化，冻结公共主体与BN，只训练102689个detail参数；Kvasir 880/120、352、batch12、num_workers8、detail LR5e-4 cosine、10 epoch、seed1234。除训练loss的样本权重外与P5.2完全一致。
+- 验证：旧structure loss与`per_image().mean()`数值差为0；构造面积样本权重单调、归一化均值为1，反向梯度有限；`git diff --check`、`py_compile`、CLI、正式训练和独立checkpoint复评均通过。
+- 结果：5m24s完成，best val IoU **0.879354@4**；独立复评mIoU0.879354、Dice0.9295、Precision0.9224、Recall0.9441、Accuracy0.9824、FPS33.23。比P5.1仅提高0.000738，比无权重P5.2低0.000510，也比P5.3a低0.000310，未达到0.8815准入线。
+- 面积机制：四组IoU为0.799771/0.899539/0.908399/0.909707，相对P5.1为+0.001920/+0.002007/+0.000503/-0.001478。最小组收益小于无权重P5.2的+0.002769，仍远低于0.810目标；说明当前瓶颈不是简单的样本loss权重不足。
+- 逐图与面积：相对P5.1胜64、负56，中位差+0.000118；预测面积/GT从0.993669降到0.988344；IoU<0.5与IoU<0.7均维持3张/7张，没有修复严重失败样本。
+- 结论：否定“单纯面积重加权即可增强小息肉”的假设；不继续调大alpha、不与P5.3a门控组合、不补其他seed。下一步应回到无权重P5.2，单变量增强H/2细节分支的多尺度上下文表达。
+- 证据：分支`kvasir-p5.3b-area-weighted-detail`，代码提交`96c0786`；run目录`/data/models/zsy/mslau-net/runs/kvasir_p53b_areaweight_tau00625_alpha05_frozen_p51_detailonly_lr5e4_structure_352_b12_e10_seed1234_gpu0_nw8_20260812_0653`；best checkpoint为`checkpoints/best_iou_0.879354_epoch_4_0.304942.pth`。
+
+### 2026-08-12：P5.4轻量多尺度H/2细节适配器
+
+- 假设：P5.2的两层普通3x3 RGB stem局部感受野不足，无法区分小息肉与反光、褶皱；在H/2引入轻量多尺度上下文可能增强小目标细节残差。
+- 具体操作：从P5.2代码新建独立`p5_sam2unet_detail_multiscale`模式；只把detail stem第二个普通3x3卷积替换为并行dilation 1/3/5的3x3 depthwise卷积，concat后用1x1卷积融合回32通道；其余refine和零初始化delta head不变。
+- 控制变量：无门控、无面积加权；从P5.1 seed1234 best初始化，冻结公共主体与BN，只训练97601个detail参数；Kvasir 880/120、352、batch12、num_workers8、structure main loss、detail LR5e-4 cosine、10 epoch、seed1234，与P5.2一致。
+- 验证：旧P5.2 checkpoint仍可strict加载；新模式从P5.1加载仅缺失detail键；零初始化输出与P5.1最大绝对差0；两步反向后dilation 1/3/5与1x1 fuse梯度均非零，公共主体无梯度；`git diff --check`、`py_compile`、CLI、正式训练和独立复评通过。
+- 结果：5m42s完成，best val IoU **0.878877@1**；独立复评mIoU0.878877、Dice0.9292、Precision0.9217、Recall0.9442、Accuracy0.9823、FPS34.12。比P5.1仅提高0.000261，比P5.2低0.000987，也低于P5.3a/P5.3b；未达到0.8815准入线。
+- 面积机制：四组IoU为0.798925/0.899408/0.908331/0.908846，相对P5.1为+0.001075/+0.001876/+0.000434/-0.002339；最小组提升明显小于P5.2的+0.002769，最大组退化更严重。
+- 逐图与面积：相对P5.1胜51、负69，中位差-0.000165；预测面积/GT从0.993669降到0.987654；IoU<0.5和<0.7仍为3张/7张，未修复严重失败样本。
+- 结论：多尺度depthwise上下文未改善当前细节分支，且胜负数和中位差均为负信号；不补其他seed。P5.2/P5.3/P5.4连续实验说明瓶颈不在简单RGB卷积表达、图像级面积门控或样本重加权，停止在当前H/2 RGB residual架构上继续微调。
+- 证据：分支`kvasir-p5.4-multiscale-detail`，代码提交`1c2d7ca`；run目录`/data/models/zsy/mslau-net/runs/kvasir_p54_multiscale_d135_frozen_p51_detailonly_lr5e4_structure_352_b12_e10_seed1234_gpu0_nw8_20260812_0706`；best checkpoint为`checkpoints/best_iou_0.878877_epoch_1_0.305183.pth`。
+
 ## 9. 后续每次追加记录的模板
 
 ```markdown
@@ -531,9 +573,9 @@ GitHub 远程仓库：`chuifengbushuang/MSLAU_OPT`。zsy 已配置 GitHub SSH �
 
 ## 10. 下一步优先级
 
-1. **P5.2小目标主线**：以冻结的P5.1为基线，先分别做“aux D2/D3权重1.0/0.5/0.25”和“H/2零初始化RGB细节残差分支”两个seed1234单变量实验；有效后才组合并补三seed。
-2. **预注册判断标准**：最小面积四分位至少从0.800657提高到0.810；总体三seed均值不低于0.872802，Precision不低于0.919、Recall不低于0.935，最大面积组下降不超过0.005。
-3. **保持单变量**：第一版细节分支不加入reverse、wavelet、手工边缘、Dropout或新Loss；如轮廓仍差，再单独增加训练期boundary head，权重0.05且不参与乘性门控。
+1. **停止当前RGB细节残差主线**：P5.2、P5.3a、P5.3b、P5.4均只带来0.0003～0.0013单seed增益且最小组未达到0.810；不再继续调detail LR、面积阈值、alpha、dilation或组合门控。
+2. **下一方向先做困难样本机制分析**：固定P5.1/P5.2预测，逐图统计严重失败的假阴性/假阳性、目标面积、边界复杂度、图像对比度和两模型差异；依据失败类型选择区域级局部纠错或训练期困难样本采样，避免继续无证据堆模块。
+3. **准入标准保持不变**：新方案seed1234总体mIoU至少0.8815、最小面积组至少0.810；Precision不低于0.919、Recall不低于0.935，最大面积组相对P5.1下降不超过0.005，IoU<0.5不超过2张。达到后才补seed42/2026。
 4. **停止旧失败路线**：不再补P3-352、不继续P4 cascade/no-final-reverse，也不继续固定0.1 DINOv2蒸馏或简单Lovasz叠加；P3/P0保留为历史基线。
 5. **更强证据**：最终方案必须补seed42/2026或建立独立test；不在同一val上反复调阈值。
 6. **复现 CVC 历史0.90**：官方CSV/fold0、clean P0、batch8、纯Dice、最高IoU保存；只改变旧训练参数。
