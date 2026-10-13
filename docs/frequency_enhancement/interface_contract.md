@@ -1,10 +1,13 @@
-# P5.1 / AFFE 接口契约
+# P5.1 / Scale-specific NAF-inspired Adaptive Frequency Feature Enhancement 接口契约
 
 ## 数据流
 
 RGB [B,3,352,352] → 冻结 Hiera-L + 可训练 block prompt adapters →
-E1/E2/E3/E4 → 原 RFBModified → P1/P2/P3/P4 → 独立 AFFE →
-原 SAM2UNetUp 三次融合 → 原 main、D2、D3 heads。
+E1/E2/E3/E4 → 原 RFBModified → P1/P2/P3/P4 → 四个独立 NAF2D →
+P1'/P2'/P3'/P4' → 唯一原 U-shaped Decoder 中 SAM2UNetUp 三次融合 → 原 main、D2、D3 heads。
+
+E 只表示编码器输出，P 表示 RFB 输出，P' 表示增强后特征，D 表示逐级解码融合特征。
+禁用某级时该级 P'=P；NAF 内不执行 Up、Concat、跨级交换或融合。
 
 | 级别 | Hiera 通道 | RFB/AFFE 输入与输出 | 半谱 H×Wf |
 |---|---:|---|---|
@@ -49,9 +52,9 @@ from networks.frequency_enhancement import AdaptiveFrequencyEnhancement2D, FourS
 module = AdaptiveFrequencyEnhancement2D(channels=64)
 y = module(x)
 
-# 给未来 Fusion 的稳定接口；只增强，绝不融合或重采样。
+# 四级容器只依次调用独立的 Tensor -> Tensor 模块，不融合或重采样。
 enhancer = FourStageFrequencyEnhancer(enabled_stages=(True, True, True, True))
-p1, p2, p3, p4 = enhancer.enhance_features([p1, p2, p3, p4])
+p1_enhanced, p2_enhanced, p3_enhanced, p4_enhanced = enhancer.enhance_features([p1, p2, p3, p4])
 
 # P5.1 普通输出接口保持原语义。
 logits = model(images)  # Tensor[B,1,352,352]
@@ -71,6 +74,8 @@ stage_diagnostics = outputs['frequency_diagnostics']
 alpha、正则值和半谱重数加权的相对频谱变化。空段均值记 0 并配合 count=0 解读。
 关闭 stage 原样返回同一个输入 tensor，诊断为 None；全部关闭时正则为零。
 `none` 不实例化 AFFE，不添加任何参数或 buffer，不改变旧 state_dict 键。
+`naf2d` 配合 `0,0,0,0` 保留新增参数但完全旁路；载入同一基线权重后，
+三个预测输出与原 P5.1 逐元素一致。此时新增参数无梯度，不等于 `none` 的参数计数。
 
 训练按显式输出传递正则，无全局缓存或“上一次 forward”的状态依赖。
 默认 λ=0 时不计算频段统计，不改变分割/辅助损失或 optimizer 超参数。
@@ -110,6 +115,9 @@ CUDA_VISIBLE_DEVICES=<空闲GPU> <python> -m tools.verify_frequency \
 ```
 
 脚本仅使用随机输入，不读取 Kvasir/CVC 数据。报告文件要求不存在，避免覆盖既有证据。
+本轮修正后的脚本输出 `measurement_version=2`：计时前释放诊断图，单级及组合测量
+均清理输入/参数梯度；显存仍是进程绝对 allocated 峰值，非单模块独占显存。
+3090 历史权重验收已完成；修正后性能脚本在3090的复测须另存新文件。
 `AFFE_FULL_SMOKE` 实例化真实 Hiera，检查三个合成优化步骤、全部冻结参数、全部可训练参数梯度、
 真实训练入口的 optimizer 参数收集表达式。提供 HIERA_CHECKPOINT 时加载预训练；
 不提供时明确属于随机权重测试。需要 pytest（开发依赖），其他依赖同项目环境。

@@ -916,10 +916,11 @@ class SAM2UNetDecoder(nn.Module):
                 return_diagnostics=return_frequency_diagnostics)
         else:
             features = self.enhance_features(features)
-        e1, e2, e3, e4 = features
-        d3 = self.up1(e4, e3)
-        d2 = self.up2(d3, e2)
-        d1 = self.up3(d2, e1)
+        # P1'..P4': independently enhanced RFB outputs (P1..P4 when disabled).
+        p1_enhanced, p2_enhanced, p3_enhanced, p4_enhanced = features
+        d3 = self.up1(p4_enhanced, p3_enhanced)
+        d2 = self.up2(d3, p2_enhanced)
+        d1 = self.up3(d2, p1_enhanced)
         logits = self.resize_logits(self.head(d1), output_size)
         if not (return_aux or return_frequency or return_frequency_diagnostics):
             return logits

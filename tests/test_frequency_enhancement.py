@@ -1,3 +1,5 @@
+from itertools import product
+
 import pytest
 import torch
 
@@ -27,7 +29,8 @@ def test_four_stages_independence_disable_and_determinism():
     outputs = model(features)
     changed = model([features[0]*3, *features[1:]])
     for index, (x, y) in enumerate(zip(features, outputs)):
-        assert x.shape == y.shape and x.dtype == y.dtype
+        assert x.shape == y.shape and x.dtype == y.dtype and x.device == y.device
+        assert not y.is_complex()
         assert not torch.equal(x, y)
         if index:
             assert torch.equal(changed[index], y)
@@ -157,3 +160,52 @@ def test_invalid_configuration():
         FourStageFrequencyEnhancer(enabled_stages=(True,)*3)
     with pytest.raises(ValueError):
         AdaptiveFrequencyEnhancement2D(4)(torch.rand(2, 3, 11, 11))
+
+
+@pytest.mark.parametrize('enabled', list(product((False, True), repeat=4)))
+def test_all_stage_masks_preserve_bypass_and_gradient_routes(enabled):
+    model = FourStageFrequencyEnhancer(enabled_stages=enabled)
+    features = [torch.randn(1, 64, s, s, requires_grad=True) for s in (88, 44, 22, 11)]
+    outputs, reg, diagnostics = model.enhance_features(
+        features, return_regularization=True, return_diagnostics=True)
+    sum(y.square().mean() for y in outputs).backward()
+    for active, stage, x, y, diag in zip(enabled, model.stages, features, outputs, diagnostics):
+        assert y.shape == x.shape and y.dtype == x.dtype and y.device == x.device
+        assert torch.isfinite(x.grad).all() and x.grad.abs().sum() > 0
+        if active:
+            assert diag is not None
+            assert all(p.grad is not None and torch.isfinite(p.grad).all()
+                       and p.grad.abs().sum() > 0 for p in stage.parameters())
+        else:
+            assert y is x and diag is None
+            assert all(p.grad is None for p in stage.parameters())
+    active_regs = [d['regularization'] for d in diagnostics if d is not None]
+    expected = torch.stack(active_regs).mean() if active_regs else reg.new_zeros(())
+    torch.testing.assert_close(reg.detach(), expected)
+
+
+@pytest.mark.parametrize('training', [False, True])
+def test_each_stage_has_no_forward_or_backward_cross_stage_dependency(training):
+    model = FourStageFrequencyEnhancer().train(training)
+    features = [torch.randn(1, 64, s, s, requires_grad=True) for s in (88, 44, 22, 11)]
+    with torch.no_grad():
+        reference = model(features)
+        for changed_index in range(4):
+            altered = list(features)
+            altered[changed_index] = altered[changed_index] * 3
+            outputs = model(altered)
+            for index in range(4):
+                if index != changed_index:
+                    assert torch.equal(reference[index], outputs[index])
+    for selected in range(4):
+        model.zero_grad(set_to_none=True)
+        for x in features:
+            x.grad = None
+        model(features)[selected].square().mean().backward()
+        for index, (x, stage) in enumerate(zip(features, model.stages)):
+            if index == selected:
+                assert x.grad is not None and x.grad.abs().sum() > 0
+                assert all(p.grad is not None and p.grad.abs().sum() > 0 for p in stage.parameters())
+            else:
+                assert x.grad is None
+                assert all(p.grad is None for p in stage.parameters())

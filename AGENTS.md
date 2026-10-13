@@ -195,6 +195,8 @@ split：/home/zsy/projects/mslau-net/configs/splits/cvc_official_csv_fold0
 
 ## 6. 当前最佳结果
 
+2026-10-13 NAF2D第二轮仅完成设计审计与合成复测，未正式训练；以下最佳分割结果不变。
+
 ### Kvasir
 
 | 模型 | 最佳 val mIoU | Epoch | 结论 |
@@ -515,6 +517,16 @@ GitHub 远程仓库：`chuifengbushuang/MSLAU_OPT`。zsy 已配置 GitHub SSH �
 - 具体操作：实际读取用户同步的完整JSON和两份日志，原样归档至docs/frequency_enhancement，并生成evidence_3090.sha256；此前仅收到摘要的归档限制解除。
 - 结果：参数量和1180旧键/20新键审计与终端摘要一致；全部数值有限、各级初始梯度非零。四级FFT最大误差1.4305e-6，小于2e-6容差；AFFE整体前向4.060ms、前后向12.033ms。
 - 结论：本轮工程证据归档完成，无模型代码改动、无正式训练，当前最佳分割结果不变。详见verification_report.md。
+
+### 2026-10-13：NAF2D最终定位审计与增量复测
+
+- 假设：现有单尺度NAF已符合四级RFB后独立增强的最终设计，需要补齐职责、旁路与测量隔离证据，不重写算法。
+- 具体操作：统一方法名Scale-specific NAF-inspired Adaptive Frequency Feature Enhancement和E/P/P'/D命名；模型仅局部变量更名，FFT/门控/残差/正则核心文件未改；修复verify_frequency诊断图滞留和单级输入梯度累积；新增21项回归，修订四份文档。
+- 控制变量：无数据集训练、无val调参、无新监督或融合；Hiera/Adapter/RFB/Up/三个Head及默认reg=0不变。GPU使用按用户最新规则，现场空闲即可使用。
+- 结果：CPU48 passed/14 skipped；本地5070Ti完整回归61 passed/1 skipped（本地无真实checkpoint），语法与diff检查通过。全部16种stage开关、train/eval阶段隔离、全关闭三头与基线精确一致、分割/正则梯度来源通过；核心满足最终研究设计。
+- 对比：参数仍为每级2177/合计8708；本轮B2 FP32随机权重全模型前向46.058→49.541ms，前后向113.235→123.233ms；峰值增量32.04/23.11MiB。测量版本2清理额外图和梯度，旧结果保留但绝对显存有历史测量限制，不将耗时变化解释为算法加速。
+- 结论：无分割/边界/去噪收益结论，当前最佳结果不变；历史3090真实1180键加载与20新键迁移证据继续有效，本轮未在3090重跑，新脚本目标环境复测待补。
+- 证据：起点4199ebc，分支feat/p5-naf-frequency-enhancement；docs/frequency_enhancement/audit_v2_cpu.xml、audit_v2_5070ti.xml、audit_v2_5070ti.json和audit_v2_evidence.sha256；verification_report追加本轮，不覆盖原始证据；handover.md仍缺失。
 
 ## 9. 后续每次追加记录的模板
 

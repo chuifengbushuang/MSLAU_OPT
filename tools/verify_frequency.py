@@ -25,12 +25,15 @@ def synchronize(device):
 
 def measure(module, forward, device, warmup, repeats, inputs=()):
     result = {}
+    def clear_gradients():
+        module.zero_grad(set_to_none=True)
+        for tensor in inputs:
+            tensor.grad = None
+
     for backward in (False, True):
         module.train(backward)
         def step():
-            module.zero_grad(set_to_none=True)
-            for tensor in inputs:
-                tensor.grad = None
+            clear_gradients()
             with torch.set_grad_enabled(backward):
                 output = forward()
                 tensors = list(output.values()) if isinstance(output, dict) else output
@@ -40,9 +43,9 @@ def measure(module, forward, device, warmup, repeats, inputs=()):
                     sum(t.float().square().mean() for t in tensors).backward()
         for _ in range(warmup):
             step()
+        clear_gradients()
         synchronize(device)
         if device.type == 'cuda':
-            module.zero_grad(set_to_none=True)
             torch.cuda.reset_peak_memory_stats(device)
         times = []
         for _ in range(repeats):
@@ -55,7 +58,27 @@ def measure(module, forward, device, warmup, repeats, inputs=()):
             'median_ms': statistics.median(times), 'min_ms': min(times), 'max_ms': max(times),
             'peak_allocated_bytes': torch.cuda.max_memory_allocated(device) if device.type == 'cuda' else None,
         }
+        clear_gradients()
     return result
+
+
+def stage_evidence(stage, x):
+    """Return Python scalars only; release diagnostic graphs before benchmarking."""
+    y, _, diag = stage.forward_with_details(x, return_diagnostics=True)
+    y.square().mean().backward()
+    with torch.no_grad():
+        entry = {k: v.cpu().tolist() for k, v in diag.items() if k != 'weights'}
+        entry.update({
+            'shape': list(x.shape),
+            'weight_std': diag['weights'].std().item(),
+            'fft_identity_max_error': (torch.fft.irfft2(torch.fft.rfft2(x, norm='ortho'), s=x.shape[-2:], norm='ortho')-x).abs().max().item(),
+            'initial_relative_change': ((y-x).norm()/x.norm()).item(),
+            'input_sensitivity_max': (stage.frequency_weights(3*x)-diag['weights']).abs().max().item(),
+            'initial_gradient_l1': {k: p.grad.abs().sum().item() for k, p in stage.named_parameters()},
+        })
+    stage.zero_grad(set_to_none=True)
+    x.grad = None
+    return entry
 
 
 def main():
@@ -83,25 +106,17 @@ def main():
         'gpu': torch.cuda.get_device_name(device) if device.type == 'cuda' else None,
         'threads': args.threads, 'batch': args.batch, 'warmup': args.warmup, 'repeats': args.repeats,
         'dtype': 'float32', 'timing_loss': 'sum of mean squared logits/features; no dataset or optimizer step',
+        'measurement_version': 2,
+        'memory_scope': 'absolute PyTorch allocated peak; diagnostics released and input/parameter gradients cleared between measurements',
     }}
     features = [torch.randn(args.batch, 64, s, s, device=device, requires_grad=True) for s in (88, 44, 22, 11)]
     affe = FourStageFrequencyEnhancer().to(device)
     report['affe_parameters'] = sum(p.numel() for p in affe.parameters())
     report['stage_parameters'] = [sum(p.numel() for p in m.parameters()) for m in affe.stages]
     report['stages'] = []
-    for index, (stage, x) in enumerate(zip(affe.stages, features)):
-        y, reg, diag = stage.forward_with_details(x, return_regularization=True, return_diagnostics=True)
-        y.square().mean().backward()
-        entry = {k: v.cpu().tolist() for k, v in diag.items() if k != 'weights'}
-        entry.update({
-            'shape': list(x.shape),
-            'weight_std': diag['weights'].std().item(),
-            'fft_identity_max_error': (torch.fft.irfft2(torch.fft.rfft2(x, norm='ortho'), s=x.shape[-2:], norm='ortho')-x).abs().max().item(),
-            'initial_relative_change': ((y-x).norm()/x.norm()).item(),
-            'input_sensitivity_max': (stage.frequency_weights(3*x)-diag['weights']).abs().max().item(),
-            'initial_gradient_l1': {k: p.grad.abs().sum().item() for k, p in stage.named_parameters()},
-            'timing': measure(stage, lambda: stage(x), device, args.warmup, args.repeats),
-        })
+    for stage, x in zip(affe.stages, features):
+        entry = stage_evidence(stage, x)
+        entry['timing'] = measure(stage, lambda: stage(x), device, args.warmup, args.repeats, inputs=(x,))
         report['stages'].append(entry)
     report['affe_timing'] = measure(affe, lambda: affe(features), device, args.warmup, args.repeats, inputs=features)
     del affe, features, x, stage

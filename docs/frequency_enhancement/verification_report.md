@@ -205,3 +205,116 @@ CPU 四级 AFFE 前向9.962 ms、前后向30.880 ms；原/新 Decoder 前向75.0
 3. 按future_ablation_plan开展原P5.1 vs AFFE（λ=0）单变量对照；
    两组必须使用相同初始化协议，不能只让AFFE从完整P5.1 checkpoint继续训练而让基线从头训练。
 4. 本轮不启动正式训练，不把工程验收解释为Dice/mIoU提升。
+
+## 第二轮：最终研究定位审计与增量复测（2026-10-13）
+
+本节为本轮实际执行结果，上方第一轮记录和原始证据保留不变。
+起点为 `feat/p5-naf-frequency-enhancement`，HEAD
+`4199ebc9eb97943503ceaefa50814a90d828a292`，工作树干净；未修改其他研究分支。
+完整重读 AGENTS.md、四份方法文档、现有模块/集成测试、测量脚本；
+核对本地两篇论文的相关章节、NAF Eq.(5)–(9)/Algorithm 1 及 SPLF-SAM §2.1–2.3。
+`handover.md` 仍缺失；使用 AGENTS、源码和已归档证据继续审计，不杜撰交接内容。
+
+### 审计清单与最小修改
+
+| 分类 | 结论与处理 |
+|---|---|
+| 已满足 | Hiera冻结、48个block adapters可训练；四个原RFB各输出64通道；四个独立NAF只访问本级Tensor；无跨级交换/融合；唯一原U形decoder及三头保留 |
+| 已满足 | H/W rfft2/irfft2、保留复谱相位、原尺寸恢复、特殊列共轭约束、AMP内FP32、有界门控、alpha各级独立且初值0.1、默认正则0、无前向图缓存 |
+| 文档修订 | 统一 Scale-specific NAF-inspired Adaptive Frequency Feature Enhancement；仅单尺度NAF启发；SPLF-SAM仅位置/组织参考，非UMFEB或MAFA复现；明确E/P/P'/D及研究假设 |
+| 代码修改 | `mslau_net.py` 只重命名4个局部变量为p*_enhanced并加注释，不改变任何层或运算；`verify_frequency.py` 修复测量隔离，见下文 |
+| 测试补充 | 16种启用组合；每级在train/eval下的前向及反向隔离；全关闭与原三头逐元素一致；正则单独反向的参数归属；测量前后梯度清理和无Tensor证据返回 |
+| 未来正式实验 | 分割/边缘/去噪收益、各级频率偏好、alpha或门控塌缩、固定与自适应比较、正则强度；本轮均不执行 |
+
+**核心 NAF 已满足最终设计，`frequency_enhancement.py` 原样保留。**
+没有重写FFT、门控、分段正则或残差，没有改动RFB内部、Hiera/Adapter、Up融合、
+Head、损失、训练参数和数据路径。单级类继续保留通用channels参数供测试使用，
+实际P5.1集成显式为64；没有新增144/288/576/1152通道的NAF。
+
+### 性能脚本发现的问题与证据解释
+
+旧脚本在单级诊断后保留 `y/reg/diag` 引用，其中未反向的正则分支仍持有图，
+直到后续Decoder/完整模型测量时仍可能存活；单级 `measure` 未传 `inputs=(x,)`，
+导致输入梯度累积，测量间也未完整释放梯度。这是测量隔离问题，不是网络前向缓存。
+
+新脚本将诊断移至 `stage_evidence`，仅返回Python标量/list，退出时释放Tensor和图；
+输入敏感性等纯诊断在no_grad中计算。所有测量逐步清理输入和参数梯度，
+预热后重置峰值前、每种模式结束后也清理；JSON记录 `measurement_version=2`。
+单级显存依然包含已分配的其他级输入/参数，不可相加当作各级净开销。
+
+历史JSON/日志/XML的SHA256已逐项复核，未覆盖。此前性能数值是旧脚本条件下的记录，
+其绝对显存包含上述额外活跃对象；保留历史值，不事后改写成修正版结果。
+新旧耗时差异也不可当作算法加速：算法未变，清理方式、运行时状态和短测波动均会影响计时。
+**3090需使用修正后的脚本另存新JSON复测；历史真实checkpoint和梯度测试结论不因此失效。**
+
+### 本轮实际执行
+
+本地Python3.11.17、torch2.13.0+cu130、timm1.0.15；GPU RTX5070Ti，
+驱动NVIDIA-SMI615.78.05/KMD617.42。执行前显存2128/16303MiB、利用率3%，
+没有可见训练进程；WSL系统/显示显存不计为PyTorch模型占用。
+使用既有 `/tmp/affe-venv/bin/python`，未改环境或安装新依赖。
+
+```bash
+NO_ALBUMENTATIONS_UPDATE=1 /tmp/affe-venv/bin/python -m pytest -q tests -ra \
+  --junitxml=docs/frequency_enhancement/audit_v2_cpu.xml
+
+NO_ALBUMENTATIONS_UPDATE=1 AFFE_FULL_SMOKE=1 AFFE_DEVICE=cuda \
+  /tmp/affe-venv/bin/python -m pytest -q tests -ra \
+  --junitxml=docs/frequency_enhancement/audit_v2_5070ti.xml
+
+NO_ALBUMENTATIONS_UPDATE=1 /tmp/affe-venv/bin/python -m tools.verify_frequency \
+  --device cuda --full --batch 2 --warmup 3 --repeats 10 \
+  --output docs/frequency_enhancement/audit_v2_5070ti.json
+
+/tmp/affe-venv/bin/python -m py_compile networks/mslau_net.py tools/verify_frequency.py \
+  tests/test_frequency_enhancement.py tests/test_p5_frequency_integration.py \
+  tests/test_frequency_benchmark.py
+git diff --check
+```
+
+- CPU：**48 passed、14 skipped、1 warning，5.53秒**。跳过CUDA12项、完整Hiera opt-in1项、真实checkpoint1项。
+- GPU完整回归：**61 passed、1 skipped、1 warning，27.91秒**。仅真实checkpoint测试跳过。
+  共62个测试项，比原41项增加21项。警告为依赖的torch.jit.interface弃用，不是失败。
+- 真实Hiera结构使用**随机权重**，3步合成Structure Loss更新验证冻结参数全量不变、
+  48个Adapter/RFB/NAF/decoder/head梯度和optimizer参数集合；FP16/BF16 CUDA检查通过。
+- 分割损失单独反向可训练门控及alpha；正则单独反向到达RFB、输入与门控，
+  不到达alpha或后续decoder/head，符合R(M)定义。禁用级NAF参数无梯度，旁路输入仍可导。
+- 四级64通道实际尺寸检查通过；本轮FFT最大重建误差9.5367e-7；
+  初始相对输出变化P1–P4为0.1081%、0.0796%、0.0927%、0.0890%，alpha均约0.1；
+  输入乘3后的最大门控差约0.0317–0.0348，全部初始参数梯度非零且有限。
+- 语法检查、diff空白检查通过，历史证据校验全部通过；新证据校验见 `audit_v2_evidence.sha256`。
+
+### 本轮重新统计的计算开销
+
+条件：B=2、RGB352、FP32、threads=2、预热3次/测量10次，GPU同步计时；
+前向eval+no_grad，前后向train+合成均方三头损失；随机权重，未加载预训练。
+不含真实数据加载、Structure Loss、optimizer.step/AdamW状态；显存为进程绝对allocated峰值。
+
+| 本轮RTX5070Ti | 原P5.1 | P5.1+NAF2D | 增量 |
+|---|---:|---:|---:|
+| 总参数 | 216419043 | 216427751 | 8708 |
+| 可训练参数 | 4269747 | 4278455 | 8708 |
+| 前向中位ms | 46.0580 | 49.5408 | +7.56% |
+| 前后向中位ms | 113.2355 | 123.2329 | +8.83% |
+| 前向峰值MiB | 975.51 | 1007.54 | +32.04 |
+| 前后向峰值MiB | 3137.71 | 3160.82 | +23.11 |
+
+每级2177参数，四级合计8708；四级NAF单独前向2.492ms、前后向5.771ms。
+Decoder无/有NAF前向3.881/7.252ms、前后向12.650/17.463ms。
+这些新结果仅适用于本地5070Ti，不替代3090结果，也不由参数少推断耗时可忽略。
+原始JSON保留min/max，完整模型前后向最大值约134.66/141.97ms，短测存在波动。
+
+### Checkpoint 状态、风险与下一步
+
+任务文本中的“真实checkpoint尚未验证”属于旧状态：此前用户3090运行已严格加载
+原P5.1的1180键；NAF迁移仅缺20个预期新键且无unexpected，完整证据已归档。
+本轮本地没有这两个真实权重文件，未重新执行预训练或真实checkpoint测试；
+本轮通过的是独立原decoder state_dict兼容检查，不能冒充真实权重复测。
+局部变量更名不改变state_dict，核心模型参数结构与已验收版本相同。
+
+下一步在3090拉取本次提交后，按interface_contract的合成命令，带真实权重重跑tests
+及修正后的verify_frequency，输出新文件如 `affe_3090_verification_02.json`。
+本轮未直接连接远程、未启动正式训练、未使用验证集、未改变当前最佳分割结果。
+长期alpha衰减、门控恒等/常数塌缩、半精度极值溢出仍需监测；有界谱增益给出L2范数界，
+不保证逐像素幅值或梯度界，更不证明边界增强/去噪或Dice提升。
+研究边界与后续P1/P2、P3/P4、逐级、固定/自适应及正则消融见配套文档。

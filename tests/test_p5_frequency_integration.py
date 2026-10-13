@@ -175,3 +175,32 @@ def test_decoder_cuda_amp(dtype):
     for name, p in model.named_parameters():
         assert p.grad is not None and torch.isfinite(p.grad).all(), name
     assert all(torch.isfinite(x.grad).all() for x in features)
+
+
+def test_all_disabled_decoder_matches_original_three_heads(old_code):
+    original = old_code.SAM2UNetDecoder().eval()
+    model = SAM2UNetDecoder(frequency_mode='naf2d', frequency_enabled_stages=(False,)*4).eval()
+    load_frequency_state_dict(model, original.state_dict(), allow_legacy=True)
+    features = synthetic_features(1)
+    with torch.no_grad():
+        expected = original(features, 352, return_aux=True)
+        actual = model(features, 352, return_aux=True, return_frequency=True,
+                       return_frequency_diagnostics=True)
+    assert all(torch.equal(actual[k], expected[k]) for k in expected)
+    assert actual['frequency_regularization'] == 0
+    assert actual['frequency_diagnostics'] == [None]*4
+
+
+def test_regularizer_only_reaches_rfb_and_gates_not_alpha_or_decoder():
+    model = SAM2UNetDecoder(frequency_mode='naf2d')
+    features = synthetic_features(1)
+    outputs = model(features, 352, return_aux=True, return_frequency=True)
+    outputs['frequency_regularization'].backward()
+    for name, parameter in model.named_parameters():
+        if name.startswith('rfbs.') or ('frequency_enhancer.' in name and 'alpha_logit' not in name):
+            assert parameter.grad is not None and torch.isfinite(parameter.grad).all(), name
+            assert parameter.grad.abs().sum() > 0, name
+        else:
+            assert parameter.grad is None, name
+    assert all(x.grad is not None and torch.isfinite(x.grad).all() and x.grad.abs().sum() > 0
+               for x in features)

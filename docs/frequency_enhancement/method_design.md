@@ -1,4 +1,9 @@
-# AFFE：NAF-inspired 二维适配设计
+# Scale-specific NAF-inspired Adaptive Frequency Feature Enhancement
+
+最终定位（2026-10-13 增量审计）：在原始 RFB 与原 U-shaped Decoder 之间，
+对四级 64 通道特征分别执行输入自适应二维频域处理。文中 AFFE、NAF2D
+均指此方法；现有类名和 `frequency_mode=naf2d` 保留，避免破坏调用与 checkpoint。
+“Scale-specific”表示每级参数独立，不表示预先规定 P1 高频、P4 低频，也不表示参数共享。
 
 ## Phase 0：基线和范围（2026-10-13）
 
@@ -17,8 +22,8 @@ PPT 的 adapter 简写与实际 Sequential 有差异；实现以源码的两个 
 Features*, IEEE TASE 22 (2025), pp.17050–17062，DOI 10.1109/TASE.2025.3579694。
 依据用户提供的 `papers/Noise_Adaptive_Filtering_Neural_Network_Under_Multiscale_Features.pdf`，
 重点逐项核对 PDF 第 4–5 页（印刷页 17053–17054）的 Fig.3–5、Eq.(5)–(9)、Algorithm 1。
-工作定位为 **Paper-based Reimplementation + NAF-inspired 2D Adaptation**，
-不是官方代码的逐行复现。原任务是工业时序软测量回归，CNN 分支尺度是卷积核尺度，
+仅借鉴单尺度 NAF 的频域选择思想，属于 **NAF-inspired 2D Adaptation**，
+不是 NAF-MSNN 的完整或精确复现。原任务是工业时序软测量回归，CNN 分支尺度是卷积核尺度，
 不等同于 Hiera 的空间金字塔 stage。
 
 | 原论文 | 本轮实现与偏差 |
@@ -47,7 +52,22 @@ Features*, IEEE TASE 22 (2025), pp.17050–17062，DOI 10.1109/TASE.2025.3579694
 
 第二篇 `papers/2508.19746v1.pdf` 是 *SPLF-SAM*，不是 NAF 的另一个版本。
 其 §2.2 / Eq.(1) 的 MAFA 对 8×8 patches 做 FFT、乘可学习核并重建，
-与这里由每次输入产生门控不同。其 UMFEB、prompt bank、融合与 decoder 不在本轮范围。
+与这里由每次输入产生门控不同。本研究只参考其网络组织思想：在特征进入解码融合前
+设置处理模块，概念上对应参考架构中 UMFEB 所在的特征处理位置。
+原论文 §2.3 的 UMFEB 实际涉及多个特征的融合与注意力；此位置类比不意味着
+NAF2D 等价于 UMFEB 或替代其全部功能。此处没有 MAFA、UMFEB、Prompt Bank
+的结构复现，沿用 P5.1 唯一的 U-shaped Decoder，不引入额外 U-Net。
+
+## 单尺度职责与符号
+
+E1–E4 专指 Hiera 编码器输出；P_i=RFB_i(E_i)，P_i'=NAF_i(P_i)。
+四个 P_i 的通道数均为 64，空间尺寸分别为 88、44、22、11（352 输入）。
+每个 NAF 只访问自己的 P_i；四个实例结构及初始超参数相同，参数不共享，
+无跨级统计、交换、上采样或融合。单模块类保留既有 channels 参数供小张量测试，
+本研究的集成路径只使用 64 通道，不新增原始 Hiera 高维 NAF 分支。
+
+P_i' 依原实现送入 D3=Up1(P4',P3')、D2=Up2(D3,P2')、D1=Up3(D2,P1')。
+Up 内的插值、Concat 顺序和卷积完全保留，Main/D2/D3 预测头及监督不变。
 
 ## 预先确定的二维方案
 
@@ -74,6 +94,26 @@ FP64 输入使用 FP64；返回输入 dtype。模型参数显式转换到工作 
 各段 R_b=mean_b((M-1)²)，平均采用半谱列重数：DC/Nyquist=1，其余=2。
 R_stage=Σ w_b R_b / Σ有效段w_b，默认 w=(1,1,1)；空段不参与分母。
 四级 R 取启用 stage 均值，全部关闭时为零。总损失为原分割损失+λ_freq R，λ 默认 0。
-这是中性的分段能量约束，抑制过强修改；本身偏好恒等，**不保证防止常数门控塌缩**。
+这是中性的分段门控偏离约束，不是对输入频谱能量直接施加惩罚；
+它抑制过强修改，本身偏好恒等，**不保证防止常数门控塌缩**。
 自适应性由任务损失驱动，后续必须监测门控方差和输入敏感性。
 诊断只在请求时生成并 detach，无模块级计算图缓存。
+
+## 数值边界与研究假设
+
+在精确算术下，对任一给定输入，有效谱增益介于 1−alpha/2 与 1+alpha/2，
+因此由 Parseval 得到 0.5‖F‖₂ ≤ ‖F_out‖₂ ≤ 1.5‖F‖₂；
+初始化 alpha=0.1 时界更紧，为 0.95–1.05。这是全局 L2 范数界，
+不是逐像素幅值界，也不是输入相关非线性映射的梯度上界。
+有限精度下 tanh/sigmoid 可饱和至端点，极端输入、参数非有限值或 FP16 输出溢出
+仍可能产生非有限值；已测数值范围内稳定不等于对所有浮点输入保证稳定。
+
+初始化近恒等、合成输入下实际频谱变化非零、长期训练中增强有效，是三个不同命题。
+前两者已有工程证据；alpha→0、门控→1 或输入敏感性丢失仍可能发生。
+正则不直接依赖 alpha；alpha 的梯度由任务损失提供。保持 alpha 初值0.1及λ=0，
+以后记录 alpha、门控方差、输入敏感性和残差后频谱变化，不凭猜测调大初值。
+
+研究假设：融合前的逐级自适应空间频率选择可能改善目标/背景区分，并保留有用结构。
+目前没有正式分割收益、边界增强或去噪成功的证据；高频也可能包含真实息肉边界。
+暂用 Frequency Feature Enhancement / Frequency Selection，不宣称 Boundary-aware、
+Edge-enhanced 或 Noise Suppression 已获验证。
