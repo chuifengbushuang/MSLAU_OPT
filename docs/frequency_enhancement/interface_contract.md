@@ -94,16 +94,16 @@ alpha、正则值和半谱重数加权的相对频谱变化。空段均值记 0 
 
 ## 3090 服务器复核（仅合成）
 
-先与同学协调 GPU，并检查 nvidia-smi 和当前进程。以下占位符必须替换；不默认 GPU0 空闲。
+先检查 nvidia-smi 和当前进程，选择现场空闲 GPU；按用户最新授权，无需另行协商。以下占位符必须替换；不默认 GPU0 空闲。
 从仓库根目录执行，Python 使用已确认的项目环境：
 
 ```bash
-CUDA_VISIBLE_DEVICES=<已确认GPU> NO_ALBUMENTATIONS_UPDATE=1 \
+CUDA_VISIBLE_DEVICES=<空闲GPU> NO_ALBUMENTATIONS_UPDATE=1 \
 AFFE_FULL_SMOKE=1 AFFE_DEVICE=cuda \
 HIERA_CHECKPOINT=<Hiera权重绝对路径> P51_CHECKPOINT=<P5.1权重绝对路径> \
 <python> -m pytest -q tests
 
-CUDA_VISIBLE_DEVICES=<已确认GPU> <python> -m tools.verify_frequency \
+CUDA_VISIBLE_DEVICES=<空闲GPU> <python> -m tools.verify_frequency \
   --device cuda --full --batch 2 --warmup 3 --repeats 10 \
   --hiera-checkpoint <Hiera权重绝对路径> \
   --p51-checkpoint <P5.1权重绝对路径> --output <新的3090证据JSON路径>

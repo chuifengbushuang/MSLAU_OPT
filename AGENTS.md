@@ -500,6 +500,16 @@ GitHub 远程仓库：`chuifengbushuang/MSLAU_OPT`。zsy 已配置 GitHub SSH �
 - 结论：工程实现已具备本地合成证据，研究效果未知，当前最佳P5.1结果不变。3090环境/真实权重验收待补；连接le@10.243.96.120:22超时，未登录服务器或使用其GPU。不得启动正式训练。
 - 证据：分支feat/p5-naf-frequency-enhancement，基线81b19e2；docs/frequency_enhancement/下method_design、interface_contract、verification_report、future_ablation_plan及原始JSON/XML；tests/、tools/verify_frequency.py。handover.md本地缺失已报告。
 
+### 2026-10-13：AFFE 的3090目标环境验收（用户执行并回传）
+
+- 假设：本地AFFE实现在目标torch2.1.2+cu118环境可运行，真实P5.1权重可审计迁移。
+- 具体操作：用户在le账号的mslau-naf环境、RTX3090 GPU0运行604b1fd；40 passed/1 skipped的合成回归后，指定真实权重定向测试2 passed/5 deselected，补齐checkpoint验证。无正式训练。
+- 控制变量：B=2、352、FP32性能测量，预热3次/重复10次；冻结主干、原Adapter/RFB/Head和损失语义保持不变。数据沿用/data/dataset/zsy/mslau-net/Kvasir-SEG与CVC-ClinicDB。
+- 结果：none严格加载1180键；naf2d加载全部1180旧键，仅缺预期20个AFFE参数、无unexpected。预训练Hiera合成梯度/冻结检查通过；TypedStorage弃用警告未导致失败。
+- 对比：前向57.7094→60.5151ms（+4.86%）；前后向145.3039→160.2846ms（+10.31%）；峰值增量分别8.56/27.20MiB。计时不含optimizer.step及真实数据加载，不代表正式训练batch显存。
+- 结论：此前3090与真实checkpoint待验项已补齐，分割效果未知，当前最佳结果不变。用户更新GPU规则：现场确认空闲即可使用，无需再与同学协商。
+- 证据：用户回传终端输出；远程父目录/home/le/WorkSpace/20261012_PolypSegmentation/中的affe_3090_tests_01.log、affe_3090_pretrained_tests_01.log、affe_3090_verification_01.json。完整JSON尚未传回本地，报告明确区分回传摘要与直接读取。
+
 ## 9. 后续每次追加记录的模板
 
 ```markdown

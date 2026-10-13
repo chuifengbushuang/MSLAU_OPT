@@ -2,13 +2,50 @@
 
 ## 验收结论与限制
 
-本地代码、四级独立模块、P5.1 集成、默认模式兼容、梯度、CPU/CUDA AMP 和复杂度检查已执行。
-**最终实验环境指定为 4×RTX 3090 共享服务器，尚未完成该服务器验收。**
-SSH 连接 `le@10.243.96.120:22` 在 8 秒连接超时内未成功，未进入认证；没有登录或占用服务器 GPU。
-等待用户提供只读查询输出以及与同学协调后的可用卡号。
-本地没有找到本项目的 Hiera 预训练权重或原 P5.1 训练 checkpoint。
-因此真实预训练冒烟、真实旧 checkpoint 迁移和 3090 性能数据均**未验证**。
-没有启动正式 Kvasir/CVC 训练，没有读验证集调参，没有改变 split、原 head 或 fusion。
+本地实现与测试已完成；用户随后在 RTX3090 上执行了提交 `604b1fd` 的合成、
+真实权重加载与性能验证，并回传终端输出。目标环境的本轮工程检查通过，尚无正式分割效果结论。
+
+证据来源需区分：本地测试由本助手执行；3090 结果来自用户回传，不是本助手直接登录执行。
+完整服务器 JSON 位于 `/home/le/WorkSpace/20261012_PolypSegmentation/affe_3090_verification_01.json`，
+该路径在本地不存在，尚未获取完整文件。本报告已记录回传的 full_models 摘要，
+尚不能归档或复核 JSON 中未粘贴的各级统计和单模块性能。
+未启动正式 Kvasir/CVC 训练，未使用验证集调参，未改变 split、原 head 或 fusion。
+
+## 3090 验收更新：用户回传（2026-10-13）
+
+- 环境：Python3.10，torch2.1.2+cu118、torchvision0.16.2+cu118、timm1.0.15、
+  numpy1.26.4、pytest8.4.2；驱动535.154.05；`pip check` 无损坏依赖。
+- 用户确认数据继续使用 `/data/dataset/zsy/mslau-net/Kvasir-SEG` 和
+  `/data/dataset/zsy/mslau-net/CVC-ClinicDB`。GPU 使用规则更新为：启动前检查，空闲卡即可使用，
+  不再要求另行与同学协商；不占用已有任务的卡。本轮 CUDA_VISIBLE_DEVICES=0。
+- 随机权重完整测试：40 passed、1 skipped（当时未指定真实checkpoint），16.02秒。
+  CUDA FFT重建最大误差4.76837158203125e-7，梯度有限。
+- 真实权重定向测试：2 passed、5 deselected，23.57秒；补齐之前跳过的checkpoint测试，
+  并在Hiera预训练下重跑冻结参数、Adapter和AFFE梯度测试。不是单次运行42项不同测试。
+- TypedStorage 弃用警告来自加载旧checkpoint，测试与性能脚本均完成，无需因此修改checkpoint。
+- none：严格载入1180个键，missing=[]、unexpected=[]。
+- naf2d：载入同样1180个旧键，unexpected=[]；missing恰为每级alpha_logit、
+  gate_in.weight/bias、gate_out.weight/bias，共20项，legacy_migration=true。
+  这是预期的新参数初始化，不是旧权重加载失败。
+
+条件：B=2、352输入、FP32、预热3次、测量10次、完整三路输出；
+前后向使用合成均方输出损失，不含optimizer.step、数据加载或正式训练的优化器状态。
+
+| RTX3090 | 原P5.1 | P5.1+AFFE | 增量 |
+|---|---:|---:|---:|
+| 参数量 | 216419043 | 216427751 | 8708 |
+| 可训练参数 | 4269747 | 4278455 | 8708 |
+| 前向中位ms | 57.7094 | 60.5151 | +2.8057（4.86%） |
+| 前后向中位ms | 145.3039 | 160.2846 | +14.9807（10.31%） |
+| 前向峰值MiB | 997.48 | 1006.04 | +8.56 |
+| 前后向峰值MiB | 3212.47 | 3239.67 | +27.20 |
+
+远程日志：项目父目录中的 `affe_3090_tests_01.log`、
+`affe_3090_pretrained_tests_01.log` 和 `affe_3090_verification_01.json`。
+命令为接口文档中的pytest与verify_frequency，用户采用历史记录中的权重环境变量；
+回传摘要确认pretrained_hiera=true和真实checkpoint加载成功，尚未回传权重文件哈希。
+
+下面保留首次本地验收的历史结果；其中“未测”是当时状态，3090/真实权重项已由本节补齐。
 
 ## 基线与环境
 
@@ -21,7 +58,7 @@ SSH 连接 `le@10.243.96.120:22` 在 8 秒连接超时内未成功，未进入�
   albumentations 1.4.24、torchmetrics 1.6.1、numpy 1.26.4 等项目依赖。
   未修改原 Conda 环境。完整包版本见 `environment_local.txt`。
 - 项目 environment.yml 标称 Python3.10 / torch2.1.2 / CUDA11.8；**本地不等于该环境**。
-  需在最终 3090 环境再次运行，不能宣称 torch2.1.2 已实测兼容。
+  首次本地验收不覆盖torch2.1.2；后续用户回传的3090测试已覆盖该版本，见上节。
 - 本地 GPU：RTX 5070 Ti，16,303 MiB，驱动查询 NVIDIA-SMI 615.78.05 / KMD 617.42。
   开始检查时使用 2,406 MiB，利用率 3%，nvidia-smi 无可见运行进程；进程列表无 python 训练。
   WSL 显示/系统显存不等于 PyTorch 显存，进程可见性有限。
@@ -141,10 +178,10 @@ CPU 四级 AFFE 前向9.962 ms、前后向30.880 ms；原/新 Decoder 前向75.0
 保留为开发记录；上表采用修正后的 `evidence_cpu_with_input_grad.json`，
 包含向 encoder/RFB 输入传播梯度的成本，GPU 报告也是修正后脚本生成。
 
-## 后续必须补齐
+## 剩余归档与下一阶段
 
-1. 获取服务器 Python/torch/CUDA/timm 版本、项目分支/HEAD、现场 GPU 占用、经协调的卡号。
-2. 在独立分支/目录同步可审查改动，先比较服务器工作树，不覆盖同学或用户修改。
-3. 提供 Hiera/P5.1 权重路径，按 interface_contract 中命令完成 pretrained/full/checkpoint 测试，逐项保存加载审计。
-4. 用实际 3090 复测 AMP、延迟、显存；如安装环境需要变动，优先隔离环境而非升级共享环境。
-5. 以上通过后，再按 future_ablation_plan 另行启动预注册单变量实验。本轮不执行。
+1. 将远程完整JSON及两份测试日志上传本地归档；目前只收到终端摘要，不声称完整文件已读取。
+2. 如进入正式实验，先固定运行配置、数据路径和split、权重哈希、seed与模型选择规则。
+3. 按future_ablation_plan开展原P5.1 vs AFFE（λ=0）单变量对照；
+   两组必须使用相同初始化协议，不能只让AFFE从完整P5.1 checkpoint继续训练而让基线从头训练。
+4. 本轮不启动正式训练，不把工程验收解释为Dice/mIoU提升。
