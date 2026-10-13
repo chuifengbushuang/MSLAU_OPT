@@ -1,0 +1,4 @@
+......................................s..                                [100%]
+=========================== short test summary info ============================
+SKIPPED [1] tests/test_p5_frequency_integration.py:152: real P5.1 checkpoint not supplied
+40 passed, 1 skipped in 16.02s

@@ -1,0 +1,344 @@
+{
+  "environment": {
+    "python": "3.10.22",
+    "torch": "2.1.2+cu118",
+    "timm": "1.0.15",
+    "cuda_build": "11.8",
+    "device": "cuda",
+    "gpu": "NVIDIA GeForce RTX 3090",
+    "threads": 2,
+    "batch": 2,
+    "warmup": 3,
+    "repeats": 10,
+    "dtype": "float32",
+    "timing_loss": "sum of mean squared logits/features; no dataset or optimizer step"
+  },
+  "affe_parameters": 8708,
+  "stage_parameters": [
+    2177,
+    2177,
+    2177,
+    2177
+  ],
+  "stages": [
+    {
+      "band_mean_weights": [
+        1.0063267946243286,
+        1.0063596963882446,
+        1.0064083337783813
+      ],
+      "band_counts": [
+        1353.0,
+        4056.0,
+        2335.0
+      ],
+      "input_norm": 995.8455200195312,
+      "filtered_norm": 1002.2650756835938,
+      "output_norm": 996.4840698242188,
+      "alpha": 0.10000000149011612,
+      "regularization": 0.0001155229183495976,
+      "relative_spectrum_change": 0.01081235520541668,
+      "shape": [
+        2,
+        64,
+        88,
+        88
+      ],
+      "weight_std": 0.00867384485900402,
+      "fft_identity_max_error": 1.430511474609375e-06,
+      "initial_relative_change": 0.001081238966435194,
+      "input_sensitivity_max": 0.037512779235839844,
+      "initial_gradient_l1": {
+        "alpha_logit": 0.0011562270810827613,
+        "gate_in.weight": 0.046486299484968185,
+        "gate_in.bias": 0.0011410799343138933,
+        "gate_out.weight": 0.23605282604694366,
+        "gate_out.bias": 0.10006530582904816
+      },
+      "timing": {
+        "forward": {
+          "median_ms": 0.8760392665863037,
+          "min_ms": 0.8587315678596497,
+          "max_ms": 0.914648175239563,
+          "peak_allocated_bytes": 45304320
+        },
+        "forward_backward": {
+          "median_ms": 3.5415850579738617,
+          "min_ms": 3.448694944381714,
+          "max_ms": 3.7392470985651016,
+          "peak_allocated_bytes": 182953984
+        }
+      }
+    },
+    {
+      "band_mean_weights": [
+        1.0043253898620605,
+        1.0042717456817627,
+        1.0041894912719727
+      ],
+      "band_counts": [
+        341.0,
+        1012.0,
+        583.0
+      ],
+      "input_norm": 498.4031066894531,
+      "filtered_norm": 500.53570556640625,
+      "output_norm": 498.6153564453125,
+      "alpha": 0.10000000149011612,
+      "regularization": 6.154151196824387e-05,
+      "relative_spectrum_change": 0.007954169064760208,
+      "shape": [
+        2,
+        64,
+        44,
+        44
+      ],
+      "weight_std": 0.006604083348065615,
+      "fft_identity_max_error": 1.430511474609375e-06,
+      "initial_relative_change": 0.0007954125176183879,
+      "input_sensitivity_max": 0.02935117483139038,
+      "initial_gradient_l1": {
+        "alpha_logit": 0.0007691378123126924,
+        "gate_in.weight": 0.04100847244262695,
+        "gate_in.bias": 0.0010120158549398184,
+        "gate_out.weight": 0.2044002115726471,
+        "gate_out.bias": 0.10025843977928162
+      },
+      "timing": {
+        "forward": {
+          "median_ms": 0.8933078497648239,
+          "min_ms": 0.8856114000082016,
+          "max_ms": 1.6774311661720276,
+          "peak_allocated_bytes": 149818368
+        },
+        "forward_backward": {
+          "median_ms": 3.477126359939575,
+          "min_ms": 2.8852075338363647,
+          "max_ms": 3.712039440870285,
+          "peak_allocated_bytes": 150336512
+        }
+      }
+    },
+    {
+      "band_mean_weights": [
+        1.0062222480773926,
+        1.0063188076019287,
+        1.0063227415084839
+      ],
+      "band_counts": [
+        89.0,
+        252.0,
+        143.0
+      ],
+      "input_norm": 247.4249725341797,
+      "filtered_norm": 248.99514770507812,
+      "output_norm": 247.58151245117188,
+      "alpha": 0.10000000149011612,
+      "regularization": 8.356803300557658e-05,
+      "relative_spectrum_change": 0.009187519550323486,
+      "shape": [
+        2,
+        64,
+        22,
+        22
+      ],
+      "weight_std": 0.006622763816267252,
+      "fft_identity_max_error": 7.152557373046875e-07,
+      "initial_relative_change": 0.0009187540854327381,
+      "input_sensitivity_max": 0.0323864221572876,
+      "initial_gradient_l1": {
+        "alpha_logit": 0.0011263639898970723,
+        "gate_in.weight": 0.098619744181633,
+        "gate_in.bias": 0.0024447115138173103,
+        "gate_out.weight": 0.17194464802742004,
+        "gate_out.bias": 0.09884610027074814
+      },
+      "timing": {
+        "forward": {
+          "median_ms": 0.956227071583271,
+          "min_ms": 0.951932743191719,
+          "max_ms": 1.3077408075332642,
+          "peak_allocated_bytes": 16113664
+        },
+        "forward_backward": {
+          "median_ms": 3.732842393219471,
+          "min_ms": 2.5771893560886383,
+          "max_ms": 4.375375807285309,
+          "peak_allocated_bytes": 17155584
+        }
+      }
+    },
+    {
+      "band_mean_weights": [
+        1.0043004751205444,
+        1.004266619682312,
+        1.0044012069702148
+      ],
+      "band_counts": [
+        21.0,
+        68.0,
+        32.0
+      ],
+      "input_norm": 124.25635528564453,
+      "filtered_norm": 124.78318786621094,
+      "output_norm": 124.30867767333984,
+      "alpha": 0.10000000149011612,
+      "regularization": 8.019326924113557e-05,
+      "relative_spectrum_change": 0.009076902642846107,
+      "shape": [
+        2,
+        64,
+        11,
+        11
+      ],
+      "weight_std": 0.00785909965634346,
+      "fft_identity_max_error": 7.152557373046875e-07,
+      "initial_relative_change": 0.0009076930582523346,
+      "input_sensitivity_max": 0.03264141082763672,
+      "initial_gradient_l1": {
+        "alpha_logit": 0.0007565032574348152,
+        "gate_in.weight": 0.058769118040800095,
+        "gate_in.bias": 0.0014508989406749606,
+        "gate_out.weight": 0.22209519147872925,
+        "gate_out.bias": 0.09969682991504669
+      },
+      "timing": {
+        "forward": {
+          "median_ms": 0.9961873292922974,
+          "min_ms": 0.9749550372362137,
+          "max_ms": 2.1092798560857773,
+          "peak_allocated_bytes": 11176960
+        },
+        "forward_backward": {
+          "median_ms": 3.622477874159813,
+          "min_ms": 2.670956775546074,
+          "max_ms": 3.7220548838377,
+          "peak_allocated_bytes": 145450496
+        }
+      }
+    }
+  ],
+  "affe_timing": {
+    "forward": {
+      "median_ms": 4.0597813203930855,
+      "min_ms": 3.9311740547418594,
+      "max_ms": 4.216181114315987,
+      "peak_allocated_bytes": 145939456
+    },
+    "forward_backward": {
+      "median_ms": 12.03281618654728,
+      "min_ms": 11.429661884903908,
+      "max_ms": 12.34324462711811,
+      "peak_allocated_bytes": 176003584
+    }
+  },
+  "decoders": {
+    "none": {
+      "parameters": 2555331,
+      "timing": {
+        "forward": {
+          "median_ms": 6.883576512336731,
+          "min_ms": 6.85303658246994,
+          "max_ms": 6.965233013033867,
+          "peak_allocated_bytes": 174109696
+        },
+        "forward_backward": {
+          "median_ms": 32.15167764574289,
+          "min_ms": 31.0452152043581,
+          "max_ms": 34.03542749583721,
+          "peak_allocated_bytes": 355096064
+        }
+      }
+    },
+    "naf2d": {
+      "parameters": 2564039,
+      "timing": {
+        "forward": {
+          "median_ms": 10.450785048305988,
+          "min_ms": 10.363200679421425,
+          "max_ms": 10.472973808646202,
+          "peak_allocated_bytes": 175207424
+        },
+        "forward_backward": {
+          "median_ms": 35.83019785583019,
+          "min_ms": 32.58712962269783,
+          "max_ms": 39.76817987859249,
+          "peak_allocated_bytes": 379980800
+        }
+      }
+    }
+  },
+  "full_models": {
+    "none": {
+      "parameters": 216419043,
+      "trainable_parameters": 4269747,
+      "pretrained_hiera": true,
+      "timing": {
+        "forward": {
+          "median_ms": 57.70939588546753,
+          "min_ms": 57.560548186302185,
+          "max_ms": 57.92281962931156,
+          "peak_allocated_bytes": 1045936128
+        },
+        "forward_backward": {
+          "median_ms": 145.30387707054615,
+          "min_ms": 143.6828337609768,
+          "max_ms": 145.99023386836052,
+          "peak_allocated_bytes": 3368519168
+        }
+      },
+      "checkpoint_audit": {
+        "missing_keys": [],
+        "unexpected_keys": [],
+        "loaded_keys": 1180,
+        "legacy_migration": false
+      }
+    },
+    "naf2d": {
+      "parameters": 216427751,
+      "trainable_parameters": 4278455,
+      "pretrained_hiera": true,
+      "timing": {
+        "forward": {
+          "median_ms": 60.515083372592926,
+          "min_ms": 59.57816727459431,
+          "max_ms": 60.799287632107735,
+          "peak_allocated_bytes": 1054910464
+        },
+        "forward_backward": {
+          "median_ms": 160.28460301458836,
+          "min_ms": 159.74908880889416,
+          "max_ms": 162.44071163237095,
+          "peak_allocated_bytes": 3397042176
+        }
+      },
+      "checkpoint_audit": {
+        "missing_keys": [
+          "progressive_decoder.frequency_enhancer.stages.0.alpha_logit",
+          "progressive_decoder.frequency_enhancer.stages.0.gate_in.bias",
+          "progressive_decoder.frequency_enhancer.stages.0.gate_in.weight",
+          "progressive_decoder.frequency_enhancer.stages.0.gate_out.bias",
+          "progressive_decoder.frequency_enhancer.stages.0.gate_out.weight",
+          "progressive_decoder.frequency_enhancer.stages.1.alpha_logit",
+          "progressive_decoder.frequency_enhancer.stages.1.gate_in.bias",
+          "progressive_decoder.frequency_enhancer.stages.1.gate_in.weight",
+          "progressive_decoder.frequency_enhancer.stages.1.gate_out.bias",
+          "progressive_decoder.frequency_enhancer.stages.1.gate_out.weight",
+          "progressive_decoder.frequency_enhancer.stages.2.alpha_logit",
+          "progressive_decoder.frequency_enhancer.stages.2.gate_in.bias",
+          "progressive_decoder.frequency_enhancer.stages.2.gate_in.weight",
+          "progressive_decoder.frequency_enhancer.stages.2.gate_out.bias",
+          "progressive_decoder.frequency_enhancer.stages.2.gate_out.weight",
+          "progressive_decoder.frequency_enhancer.stages.3.alpha_logit",
+          "progressive_decoder.frequency_enhancer.stages.3.gate_in.bias",
+          "progressive_decoder.frequency_enhancer.stages.3.gate_in.weight",
+          "progressive_decoder.frequency_enhancer.stages.3.gate_out.bias",
+          "progressive_decoder.frequency_enhancer.stages.3.gate_out.weight"
+        ],
+        "unexpected_keys": [],
+        "loaded_keys": 1180,
+        "legacy_migration": true
+      }
+    }
+  }
+}

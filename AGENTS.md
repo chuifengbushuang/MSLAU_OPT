@@ -510,6 +510,12 @@ GitHub 远程仓库：`chuifengbushuang/MSLAU_OPT`。zsy 已配置 GitHub SSH �
 - 结论：此前3090与真实checkpoint待验项已补齐，分割效果未知，当前最佳结果不变。用户更新GPU规则：现场确认空闲即可使用，无需再与同学协商。
 - 证据：用户回传终端输出；远程父目录/home/le/WorkSpace/20261012_PolypSegmentation/中的affe_3090_tests_01.log、affe_3090_pretrained_tests_01.log、affe_3090_verification_01.json。完整JSON尚未传回本地，报告明确区分回传摘要与直接读取。
 
+### 2026-10-13：3090完整证据归档
+
+- 具体操作：实际读取用户同步的完整JSON和两份日志，原样归档至docs/frequency_enhancement，并生成evidence_3090.sha256；此前仅收到摘要的归档限制解除。
+- 结果：参数量和1180旧键/20新键审计与终端摘要一致；全部数值有限、各级初始梯度非零。四级FFT最大误差1.4305e-6，小于2e-6容差；AFFE整体前向4.060ms、前后向12.033ms。
+- 结论：本轮工程证据归档完成，无模型代码改动、无正式训练，当前最佳分割结果不变。详见verification_report.md。
+
 ## 9. 后续每次追加记录的模板
 
 ```markdown
