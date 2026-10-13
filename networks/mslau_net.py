@@ -9,6 +9,7 @@ import copy
 
 from networks.msla import MSLA
 from networks.edge_guidance import EdgeGuidedAttention
+from networks.frequency_enhancement import FourStageFrequencyEnhancer
 
 layer_scale = False
 init_value = 1e-6
@@ -859,8 +860,14 @@ class SAM2UNetDecoder(nn.Module):
     """Official RFB + U-shaped decoder with two deeply supervised outputs."""
 
     def __init__(self, encoder_channels=(144, 288, 576, 1152), channels=64,
-                 num_classes=1):
+                 num_classes=1, frequency_mode="none",
+                 frequency_enabled_stages=(True, True, True, True),
+                 frequency_band_edges=(1/3, 2/3), frequency_band_weights=(1., 1., 1.),
+                 frequency_alpha_init=0.1):
         super().__init__()
+        if frequency_mode not in {"none", "naf2d"}:
+            raise ValueError("Unsupported frequency mode: {}".format(frequency_mode))
+        self.frequency_mode = frequency_mode
         self.rfbs = nn.ModuleList([
             RFBModified(in_channels, channels) for in_channels in encoder_channels
         ])
@@ -870,6 +877,26 @@ class SAM2UNetDecoder(nn.Module):
         self.side1 = nn.Conv2d(channels, num_classes, 1)
         self.side2 = nn.Conv2d(channels, num_classes, 1)
         self.head = nn.Conv2d(channels, num_classes, 1)
+        # Construct after all original layers to preserve their RNG initialization.
+        # none registers no new parameters or state_dict keys.
+        self.frequency_enhancer = (
+            FourStageFrequencyEnhancer(
+                channels, enabled_stages=frequency_enabled_stages,
+                band_edges=frequency_band_edges, band_weights=frequency_band_weights,
+                alpha_init=frequency_alpha_init)
+            if frequency_mode == "naf2d" else None)
+
+    def enhance_features(self, features, *, return_regularization=False,
+                         return_diagnostics=False):
+        if len(features) != 4:
+            raise ValueError("exactly four RFB features are required")
+        if self.frequency_enhancer is not None:
+            return self.frequency_enhancer.enhance_features(
+                features, return_regularization=return_regularization,
+                return_diagnostics=return_diagnostics)
+        if return_regularization or return_diagnostics:
+            return list(features), features[0].new_zeros(()) if return_regularization else None, None
+        return list(features)
 
     @staticmethod
     def resize_logits(logits, output_size):
@@ -877,21 +904,36 @@ class SAM2UNetDecoder(nn.Module):
             logits, size=(output_size, output_size),
             mode="bilinear", align_corners=False)
 
-    def forward(self, encoder_features, output_size, return_aux=False):
-        e1, e2, e3, e4 = [
-            rfb(feature) for rfb, feature in zip(self.rfbs, encoder_features)
-        ]
+    def forward(self, encoder_features, output_size, return_aux=False,
+                return_frequency=False, return_frequency_diagnostics=False):
+        if len(encoder_features) != 4:
+            raise ValueError("exactly four encoder features are required")
+        features = [rfb(feature) for rfb, feature in zip(self.rfbs, encoder_features)]
+        reg, diagnostics = None, None
+        if return_frequency or return_frequency_diagnostics:
+            features, reg, diagnostics = self.enhance_features(
+                features, return_regularization=return_frequency,
+                return_diagnostics=return_frequency_diagnostics)
+        else:
+            features = self.enhance_features(features)
+        e1, e2, e3, e4 = features
         d3 = self.up1(e4, e3)
         d2 = self.up2(d3, e2)
         d1 = self.up3(d2, e1)
         logits = self.resize_logits(self.head(d1), output_size)
-        if not return_aux:
+        if not (return_aux or return_frequency or return_frequency_diagnostics):
             return logits
-        return {
-            "logits": logits,
-            "aux_d2": self.resize_logits(self.side2(d2), output_size),
-            "aux_d3": self.resize_logits(self.side1(d3), output_size),
-        }
+        outputs = {"logits": logits}
+        if return_aux:
+            outputs.update({
+                "aux_d2": self.resize_logits(self.side2(d2), output_size),
+                "aux_d3": self.resize_logits(self.side1(d3), output_size),
+            })
+        if return_frequency:
+            outputs["frequency_regularization"] = reg
+        if return_frequency_diagnostics:
+            outputs["frequency_diagnostics"] = diagnostics
+        return outputs
 
 
 class MSLAU_net(nn.Module):
@@ -901,7 +943,10 @@ class MSLAU_net(nn.Module):
                  decoder_mode="legacy", progressive_channels=96,
                  p3_use_wavelet_edges=True, p3_use_reverse_attention=True,
                  encoder_name="mslau", hiera_checkpoint=None,
-                 freeze_hiera_backbone=True):
+                 freeze_hiera_backbone=True, frequency_mode="none",
+                 frequency_enabled_stages=(True, True, True, True),
+                 frequency_band_edges=(1/3, 2/3), frequency_band_weights=(1., 1., 1.),
+                 frequency_alpha_init=0.1):
         super(MSLAU_net, self).__init__()
         if decoder_mode not in {
                 "legacy", "progressive_wavelet", "cascade_reverse",
@@ -916,6 +961,11 @@ class MSLAU_net(nn.Module):
         if encoder_name == "sam2_hiera_large" and decoder_mode not in {
                 "p5_hiera_reverse", "p5_sam2unet"}:
             raise ValueError("SAM2 Hiera encoder is currently reserved for P5")
+        if frequency_mode not in {"none", "naf2d"}:
+            raise ValueError("Unsupported frequency mode: {}".format(frequency_mode))
+        if frequency_mode != "none" and decoder_mode != "p5_sam2unet":
+            raise ValueError("AFFE is only supported by p5_sam2unet")
+        self.frequency_mode = frequency_mode
         self.img_size = img_size
         self.norm_cfg = None
         self.mla_channels = mla_channels
@@ -983,9 +1033,17 @@ class MSLAU_net(nn.Module):
                     encoder_channels=encoder_channels,
                     channels=64,
                     num_classes=num_classes,
+                    frequency_mode=frequency_mode,
+                    frequency_enabled_stages=frequency_enabled_stages,
+                    frequency_band_edges=frequency_band_edges,
+                    frequency_band_weights=frequency_band_weights,
+                    frequency_alpha_init=frequency_alpha_init,
                 )
 
-    def forward(self, inputs, return_aux=False, return_features=False):
+    def forward(self, inputs, return_aux=False, return_features=False,
+                return_frequency=False, return_frequency_diagnostics=False):
+        if (return_frequency or return_frequency_diagnostics) and self.decoder_mode != "p5_sam2unet":
+            raise ValueError("frequency details require p5_sam2unet")
         edge_inputs = inputs
         if inputs.size()[1] == 1:
             inputs = inputs.repeat(1, 3, 1, 1)
@@ -999,6 +1057,11 @@ class MSLAU_net(nn.Module):
                     output_size=self.img_size,
                     return_aux=return_aux,
                 )
+            elif self.decoder_mode == "p5_sam2unet":
+                outputs = self.progressive_decoder(
+                    encoder_features, output_size=self.img_size, return_aux=return_aux,
+                    return_frequency=return_frequency,
+                    return_frequency_diagnostics=return_frequency_diagnostics)
             else:
                 outputs = self.progressive_decoder(
                     encoder_features,

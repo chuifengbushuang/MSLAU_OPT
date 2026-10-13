@@ -1,0 +1,285 @@
+{
+  "environment": {
+    "python": "3.11.17",
+    "torch": "2.13.0+cu130",
+    "timm": "1.0.15",
+    "cuda_build": "13.0",
+    "device": "cpu",
+    "gpu": null,
+    "threads": 2,
+    "batch": 2,
+    "warmup": 3,
+    "repeats": 5,
+    "dtype": "float32",
+    "timing_loss": "sum of mean squared logits/features; no dataset or optimizer step"
+  },
+  "affe_parameters": 8708,
+  "stage_parameters": [
+    2177,
+    2177,
+    2177,
+    2177
+  ],
+  "stages": [
+    {
+      "band_mean_weights": [
+        1.005659580230713,
+        1.005708932876587,
+        1.0057791471481323
+      ],
+      "band_counts": [
+        1353.0,
+        4056.0,
+        2335.0
+      ],
+      "input_norm": 995.9315185546875,
+      "filtered_norm": 1001.6151733398438,
+      "output_norm": 996.4959106445312,
+      "alpha": 0.10000000149011612,
+      "regularization": 9.78980606305413e-05,
+      "relative_spectrum_change": 0.009896413423120975,
+      "shape": [
+        2,
+        64,
+        88,
+        88
+      ],
+      "weight_std": 0.008084723725914955,
+      "fft_identity_max_error": 9.5367431640625e-07,
+      "initial_relative_change": 0.000989638501778245,
+      "input_sensitivity_max": 0.04243117570877075,
+      "initial_gradient_l1": {
+        "alpha_logit": 0.0010238094255328178,
+        "gate_in.weight": 0.06437831372022629,
+        "gate_in.bias": 0.001586965168826282,
+        "gate_out.weight": 0.23601794242858887,
+        "gate_out.bias": 0.10008478909730911
+      },
+      "timing": {
+        "forward": {
+          "median_ms": 10.284600022714585,
+          "min_ms": 10.021544992923737,
+          "max_ms": 10.90506196487695,
+          "peak_allocated_bytes": null
+        },
+        "forward_backward": {
+          "median_ms": 19.1745400079526,
+          "min_ms": 15.532869030721486,
+          "max_ms": 24.612505978439003,
+          "peak_allocated_bytes": null
+        }
+      }
+    },
+    {
+      "band_mean_weights": [
+        1.0053683519363403,
+        1.0054339170455933,
+        1.005436897277832
+      ],
+      "band_counts": [
+        341.0,
+        1012.0,
+        583.0
+      ],
+      "input_norm": 497.36297607421875,
+      "filtered_norm": 500.04833984375,
+      "output_norm": 497.62939453125,
+      "alpha": 0.10000000149011612,
+      "regularization": 0.00011914136121049523,
+      "relative_spectrum_change": 0.010970349423587322,
+      "shape": [
+        2,
+        64,
+        44,
+        44
+      ],
+      "weight_std": 0.009485838934779167,
+      "fft_identity_max_error": 9.5367431640625e-07,
+      "initial_relative_change": 0.0010970353614538908,
+      "input_sensitivity_max": 0.04102528095245361,
+      "initial_gradient_l1": {
+        "alpha_logit": 0.000964167236816138,
+        "gate_in.weight": 0.08132973313331604,
+        "gate_in.bias": 0.002004397101700306,
+        "gate_out.weight": 0.293351948261261,
+        "gate_out.bias": 0.0998287945985794
+      },
+      "timing": {
+        "forward": {
+          "median_ms": 1.4420960214920342,
+          "min_ms": 1.3268860056996346,
+          "max_ms": 1.9938389887101948,
+          "peak_allocated_bytes": null
+        },
+        "forward_backward": {
+          "median_ms": 3.2936439965851605,
+          "min_ms": 3.1424909830093384,
+          "max_ms": 4.226192948408425,
+          "peak_allocated_bytes": null
+        }
+      }
+    },
+    {
+      "band_mean_weights": [
+        1.0055476427078247,
+        1.005518913269043,
+        1.0055005550384521
+      ],
+      "band_counts": [
+        89.0,
+        252.0,
+        143.0
+      ],
+      "input_norm": 249.4683074951172,
+      "filtered_norm": 250.85154724121094,
+      "output_norm": 249.6060028076172,
+      "alpha": 0.10000000149011612,
+      "regularization": 8.954769145930186e-05,
+      "relative_spectrum_change": 0.009447414427995682,
+      "shape": [
+        2,
+        64,
+        22,
+        22
+      ],
+      "weight_std": 0.007703267503529787,
+      "fft_identity_max_error": 8.344650268554688e-07,
+      "initial_relative_change": 0.000944742641877383,
+      "input_sensitivity_max": 0.030163288116455078,
+      "initial_gradient_l1": {
+        "alpha_logit": 0.000998927978798747,
+        "gate_in.weight": 0.051785558462142944,
+        "gate_in.bias": 0.0012736850185319781,
+        "gate_out.weight": 0.2362462878227234,
+        "gate_out.bias": 0.10047539323568344
+      },
+      "timing": {
+        "forward": {
+          "median_ms": 0.6503189797513187,
+          "min_ms": 0.5460479878820479,
+          "max_ms": 0.7488979608751833,
+          "peak_allocated_bytes": null
+        },
+        "forward_backward": {
+          "median_ms": 1.6274849767796695,
+          "min_ms": 1.505595981143415,
+          "max_ms": 2.0336039597168565,
+          "peak_allocated_bytes": null
+        }
+      }
+    },
+    {
+      "band_mean_weights": [
+        1.0049822330474854,
+        1.0050842761993408,
+        1.0051722526550293
+      ],
+      "band_counts": [
+        21.0,
+        68.0,
+        32.0
+      ],
+      "input_norm": 124.17353820800781,
+      "filtered_norm": 124.81084442138672,
+      "output_norm": 124.23717498779297,
+      "alpha": 0.10000000149011612,
+      "regularization": 4.755388363264501e-05,
+      "relative_spectrum_change": 0.0068730623461306095,
+      "shape": [
+        2,
+        64,
+        11,
+        11
+      ],
+      "weight_std": 0.004634961020201445,
+      "fft_identity_max_error": 7.152557373046875e-07,
+      "initial_relative_change": 0.0006873089587315917,
+      "input_sensitivity_max": 0.015561938285827637,
+      "initial_gradient_l1": {
+        "alpha_logit": 0.0009186482056975365,
+        "gate_in.weight": 0.07871615886688232,
+        "gate_in.bias": 0.0019535222090780735,
+        "gate_out.weight": 0.1433376669883728,
+        "gate_out.bias": 0.09958712756633759
+      },
+      "timing": {
+        "forward": {
+          "median_ms": 0.41494896868243814,
+          "min_ms": 0.34932896960526705,
+          "max_ms": 0.4578479565680027,
+          "peak_allocated_bytes": null
+        },
+        "forward_backward": {
+          "median_ms": 1.0849219979718328,
+          "min_ms": 0.9485280024819076,
+          "max_ms": 1.7265439964830875,
+          "peak_allocated_bytes": null
+        }
+      }
+    }
+  ],
+  "affe_timing": {
+    "forward": {
+      "median_ms": 9.961761999875307,
+      "min_ms": 9.492943005170673,
+      "max_ms": 10.983368963934481,
+      "peak_allocated_bytes": null
+    },
+    "forward_backward": {
+      "median_ms": 30.88021097937599,
+      "min_ms": 29.99091800302267,
+      "max_ms": 31.469447014387697,
+      "peak_allocated_bytes": null
+    }
+  },
+  "decoders": {
+    "none": {
+      "parameters": 2555331,
+      "timing": {
+        "forward": {
+          "median_ms": 75.06769796600565,
+          "min_ms": 73.58570001088083,
+          "max_ms": 80.0467929802835,
+          "peak_allocated_bytes": null
+        },
+        "forward_backward": {
+          "median_ms": 230.36812897771597,
+          "min_ms": 226.66223399573937,
+          "max_ms": 244.36874204548076,
+          "peak_allocated_bytes": null
+        }
+      }
+    },
+    "naf2d": {
+      "parameters": 2564039,
+      "timing": {
+        "forward": {
+          "median_ms": 72.78900902019814,
+          "min_ms": 71.58573804190382,
+          "max_ms": 78.56443204218522,
+          "peak_allocated_bytes": null
+        },
+        "forward_backward": {
+          "median_ms": 261.45183603512123,
+          "min_ms": 251.75809202482924,
+          "max_ms": 268.6568180215545,
+          "peak_allocated_bytes": null
+        }
+      }
+    }
+  },
+  "full_models": {
+    "none": {
+      "parameters": 216419043,
+      "trainable_parameters": 4269747,
+      "pretrained_hiera": false,
+      "timing": null
+    },
+    "naf2d": {
+      "parameters": 216427751,
+      "trainable_parameters": 4278455,
+      "pretrained_hiera": false,
+      "timing": null
+    }
+  }
+}

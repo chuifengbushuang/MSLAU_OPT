@@ -1,0 +1,2 @@
+# Install into the existing project environment; do not replace its torch/CUDA build.
+pytest>=7,<10

@@ -28,6 +28,8 @@ from loss import (
     StructureLoss_binary,
 )
 from networks.mslau_net import MSLAU_net
+from networks.frequency_config import add_frequency_arguments, frequency_model_kwargs
+from networks.frequency_enhancement import load_frequency_state_dict
 
 if platform.system() != "Windows":
     pathlib.WindowsPath = pathlib.PosixPath
@@ -231,7 +233,10 @@ class DINOv2FeatureDistiller(nn.Module):
 def train_model(model, criterion, optimizer, scheduler, dataloaders, metric,
                 num_epochs, save_dir, aux_criterion=None, aux_d1_weight=0.0,
                 aux_d2_weight=0.2, aux_d3_weight=0.1, boundary_weight=0.1,
-                distiller=None, distill_weight=0.0):
+                distiller=None, distill_weight=0.0, frequency_reg_weight=0.0):
+    if (not np.isfinite(frequency_reg_weight) or frequency_reg_weight < 0
+            or (frequency_reg_weight and model.frequency_mode != "naf2d")):
+        raise ValueError("frequency regularization requires naf2d and a nonnegative weight")
     since = time.time()
     best_loss = float("inf")
     best_loss_epoch = 0
@@ -279,6 +284,7 @@ def train_model(model, criterion, optimizer, scheduler, dataloaders, metric,
                         inputs,
                         return_aux=model.decoder_mode != "legacy",
                         return_features=distiller is not None and phase == "train",
+                        return_frequency=frequency_reg_weight > 0,
                     )
                     if isinstance(model_outputs, dict):
                         outputs = model_outputs["logits"]
@@ -315,6 +321,8 @@ def train_model(model, criterion, optimizer, scheduler, dataloaders, metric,
                         outputs = model_outputs
                         main_loss = criterion(outputs, labels)
                         loss = main_loss
+                    if frequency_reg_weight > 0:
+                        loss = loss + frequency_reg_weight * model_outputs["frequency_regularization"]
                     distill_loss = outputs.new_zeros(())
                     if distiller is not None and phase == "train":
                         distill_loss = distiller(
@@ -497,7 +505,11 @@ if __name__ == "__main__":
         choices=["fixed", "lff_scale"],
         help="feature fusion mode in Conv_MLA",
     )
+    parser.add_argument("--init_checkpoint", default=None,
+                        help="strict model initialization or audited old-P5.1 to AFFE migration")
+    add_frequency_arguments(parser)
     args = parser.parse_args()
+    frequency_kwargs = frequency_model_kwargs(args)
     seed = args.seed
     torch.manual_seed(seed)
     np.random.seed(seed)
@@ -560,9 +572,18 @@ if __name__ == "__main__":
         p3_use_wavelet_edges=not args.disable_p3_wavelet_edge,
         p3_use_reverse_attention=not args.disable_p3_reverse_attention,
         encoder_name=args.encoder_name,
+        **frequency_kwargs,
         hiera_checkpoint=(
             resolve_path(args.hiera_checkpoint) if args.hiera_checkpoint else None),
     )
+    logging.info("Frequency configuration: %s reg_weight=%s", frequency_kwargs, args.frequency_reg_weight)
+    if args.init_checkpoint:
+        if args.decoder_mode != "p5_sam2unet":
+            raise ValueError("--init_checkpoint is currently reserved for P5.1")
+        audit = load_frequency_state_dict(
+            model, torch.load(resolve_path(args.init_checkpoint), map_location="cpu", weights_only=True),
+            allow_legacy=args.frequency_mode == "naf2d")
+        logging.info("Initialization checkpoint audit: %s", audit)
     logging.info("Encoder: %s", model.encoder_name)
     logging.info("Decoder mode: %s", model.decoder_mode)
     logging.info("Edge guidance enabled: %s", model.edge_guidance_enabled)
@@ -755,4 +776,5 @@ if __name__ == "__main__":
         boundary_weight=args.boundary_weight,
         distiller=distiller,
         distill_weight=args.distill_weight,
+        frequency_reg_weight=args.frequency_reg_weight,
     )

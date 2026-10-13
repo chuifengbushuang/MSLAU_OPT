@@ -3,7 +3,7 @@
 > 本文件是 Codex 的长期项目记忆。每次代码修改或实验完成后都必须更新。
 > 本文件位于 Git 仓库根目录，是 Mac、`.120`、`.194` 三端同步时的唯一权威版本。
 > `handover.md` 仅用于一次性交接本轮对话，不替代本文件。
-> 最近更新：2026-08-12。
+> 最近更新：2026-10-13。
 
 ## 1. 长期目标
 
@@ -489,6 +489,16 @@ GitHub 远程仓库：`chuifengbushuang/MSLAU_OPT`。zsy 已配置 GitHub SSH �
 - 面积分组：P5.1三seed从最小到最大GT面积四分位IoU为0.800657/0.895469/0.907776/0.887301；相对P3分别为+0.002680/+0.010673/+0.007913/+0.030481。小目标绝对值最低且提升最小，下一步应补高分辨率局部细节，但不能破坏中大目标与全局结构收益。
 - 证据：seed1234 run目录`/data/models/zsy/mslau-net/runs/kvasir_p5a_sam2unet_hiera_l_blockadapter32_rfb64_structure_352_b12_e20_seed1234_gpu0_nw8_20260811_0906`，最佳checkpoint为`checkpoints/best_iou_0.878616_epoch_17_0.304569.pth`；seed42/2026 run目录后缀分别为`seed42_gpu0_nw8_20260811_0941`和`seed2026_gpu1_nw8_20260811_0941`。
 - 结论：P5.1已替代P3成为当前Kvasir主模型；分支`kvasir-p5-sam2unet-official-adapter`，核心代码提交`6602594`。后续以P5.1为冻结基线，新分支单变量改善小息肉。
+
+### 2026-10-13：P5.1 四级独立 AFFE 代码与合成验证（未正式训练）
+
+- 假设：在 RFB 后以输入自适应二维频域门控增强每级特征，可提供可消融的频域研究接口；本轮仅验证工程与数值，不检验分割收益。
+- 具体操作：新增 frequency_enhancement.py 与共享 CLI；四级独立 AFFE、实数半谱门控、共轭约束、近恒等残差、可选中性分段正则；只接在 RFB 后，不改 Hiera/Adapter、Up、head、融合或 Structure Loss。默认 frequency_mode=none、frequency_reg_weight=0；补充严格/审计式 checkpoint 加载。
+- 控制变量：未读取数据做训练/调参，split/增强/监督权重/优化器超参数不变；合成梯度检查仅3步。最终硬件为用户指定的共享4×RTX3090，需逐次协调可用卡。
+- 结果：最终完整合成回归40 passed、1 skipped（真实checkpoint）、1依赖弃用警告；本地 CPU 模块/Decoder 检查通过；本地 RTX5070Ti 真实 Hiera 随机权重全链路、冻结参数全量不变、48个Adapter及RFB/AFFE梯度、FP16/BF16通过；旧提交Decoder的none输出逐元素一致，模拟旧state_dict迁移只缺20个AFFE键。实际旧checkpoint和预训练权重未提供，不能称已验证真实兼容。
+- 对比：新增8708参数（每级2177），完整参数216419043→216427751；四级初始相对输出变化约0.07%–0.11%；FP32 FFT/IFFT最大误差≤9.54e-7。本地B=2完整模型前向46.24→50.02ms，前后向121.53→137.34ms，不代表3090性能。
+- 结论：工程实现已具备本地合成证据，研究效果未知，当前最佳P5.1结果不变。3090环境/真实权重验收待补；连接le@10.243.96.120:22超时，未登录服务器或使用其GPU。不得启动正式训练。
+- 证据：分支feat/p5-naf-frequency-enhancement，基线81b19e2；docs/frequency_enhancement/下method_design、interface_contract、verification_report、future_ablation_plan及原始JSON/XML；tests/、tools/verify_frequency.py。handover.md本地缺失已报告。
 
 ## 9. 后续每次追加记录的模板
 

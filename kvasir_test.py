@@ -13,6 +13,8 @@ from torch.utils.data import DataLoader
 
 from loader import binary_class
 from networks.mslau_net import MSLAU_net
+from networks.frequency_config import add_frequency_arguments, frequency_model_kwargs
+from networks.frequency_enhancement import load_frequency_state_dict
 
 if platform.system() != "Windows":
     pathlib.WindowsPath = pathlib.PosixPath
@@ -148,7 +150,9 @@ if __name__ == "__main__":
                         help="disable the P3 wavelet edge multiplication gate")
     parser.add_argument("--disable_p3_reverse_attention", action="store_true",
                         help="disable the P3 reverse-attention multiplication gate")
+    add_frequency_arguments(parser)
     args = parser.parse_args()
+    frequency_kwargs = frequency_model_kwargs(args)
 
     dataset_path = resolve_path(args.dataset)
     split_txt = resolve_path(args.split_txt)
@@ -191,8 +195,13 @@ if __name__ == "__main__":
         p3_use_wavelet_edges=not args.disable_p3_wavelet_edge,
         p3_use_reverse_attention=not args.disable_p3_reverse_attention,
         encoder_name=args.encoder_name,
+        **frequency_kwargs,
     )
-    model.load_state_dict(torch.load(model_path, map_location=device, weights_only=False))
+    # Evaluation is always strict: legacy migration is explicit training initialization only.
+    audit = load_frequency_state_dict(
+        model, torch.load(model_path, map_location="cpu", weights_only=True))
+    print("Frequency configuration:", frequency_kwargs)
+    print("Checkpoint audit:", audit)
     model = model.to(device)
     model.eval()
 
