@@ -303,12 +303,17 @@ class BuildTests(unittest.TestCase):
         added = definition / 'added/networks/example.py'
         added.parent.mkdir(parents=True)
         added.write_text('VALUE = 1\n')
+        cache = added.parent / '__pycache__'
+        cache.mkdir()
+        (cache / 'example.cpython-311.pyc').write_bytes(b'interpreter-specific cache')
         output = Path(self.temporary.name) / 'experiment'
         result = builder.build('exp01_example', output)
         self.assertTrue((output / 'kvasir_train.py').read_text().startswith('# experiment-specific'))
         self.assertEqual((output / 'networks/example.py').read_text(), 'VALUE = 1\n')
         self.assertEqual((self.base / 'kvasir_train.py').read_bytes(), original)
         self.assertTrue(result['patch_sha256'])
+        self.assertFalse((output / 'networks/__pycache__').exists())
+        self.assertEqual(set(result['added_files']), {'networks/example.py'})
         # Delete the definition too: the generated source remains self-contained.
         shutil.rmtree(definition)
         run = subprocess.run([sys.executable, str(output / 'run.py')], cwd=output,

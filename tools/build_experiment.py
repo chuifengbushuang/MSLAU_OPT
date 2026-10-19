@@ -61,6 +61,8 @@ def build(experiment, output):
         for path in added.rglob('*'):
             if path.is_symlink():
                 raise ValueError(f'Added symlink is not allowed: {path}')
+            if '__pycache__' in path.relative_to(added).parts or path.suffix in {'.pyc', '.pyo'}:
+                continue
             if path.is_file():
                 name = str(safe_relative(path.relative_to(added).as_posix()))
                 if name in original_names or name in {'config.json', 'source_manifest.json', 'build_manifest.json', 'README.md'}:

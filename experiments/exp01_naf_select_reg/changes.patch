@@ -1,0 +1,107 @@
+--- a/networks/mslau_net.py
++++ b/networks/mslau_net.py
+@@ -7,6 +7,7 @@
+ from timm.layers import trunc_normal_, DropPath, to_2tuple
+ import copy
+ 
++from networks.naf_select_reg import BudgetNAF2D
+ from networks.msla import MSLA
+ from networks.edge_guidance import EdgeGuidedAttention
+ 
+@@ -870,6 +871,8 @@
+         self.side1 = nn.Conv2d(channels, num_classes, 1)
+         self.side2 = nn.Conv2d(channels, num_classes, 1)
+         self.head = nn.Conv2d(channels, num_classes, 1)
++        self.naf_p3 = BudgetNAF2D(scale_index=3)
++        self.naf_p4 = BudgetNAF2D(scale_index=4)
+ 
+     @staticmethod
+     def resize_logits(logits, output_size):
+@@ -881,6 +884,8 @@
+         e1, e2, e3, e4 = [
+             rfb(feature) for rfb, feature in zip(self.rfbs, encoder_features)
+         ]
++        e3, reg3, stats3 = self.naf_p3(e3)
++        e4, reg4, stats4 = self.naf_p4(e4)
+         d3 = self.up1(e4, e3)
+         d2 = self.up2(d3, e2)
+         d1 = self.up3(d2, e1)
+@@ -891,6 +896,8 @@
+             "logits": logits,
+             "aux_d2": self.resize_logits(self.side2(d2), output_size),
+             "aux_d3": self.resize_logits(self.side1(d3), output_size),
++            "naf_regularization": (reg3 + reg4) * 0.5,
++            "naf_stats": torch.stack([stats3, stats4]),
+         }
+ 
+ 
+--- a/kvasir_train.py
++++ b/kvasir_train.py
+@@ -28,6 +28,7 @@
+     StructureLoss_binary,
+ )
+ from networks.mslau_net import MSLAU_net
++from networks.naf_select_reg import STATS_NAMES
+ 
+ if platform.system() != "Windows":
+     pathlib.WindowsPath = pathlib.PosixPath
+@@ -261,6 +262,7 @@
+             running_iou = 0.0
+             running_distill_loss = 0.0
+             running_samples = 0
++            running_naf_stats = None
+ 
+             for inputs, labels, _ in dataloaders[phase]:
+                 if torch.cuda.is_available():
+@@ -315,6 +317,14 @@
+                         outputs = model_outputs
+                         main_loss = criterion(outputs, labels)
+                         loss = main_loss
++                    naf_regularization = model_outputs["naf_regularization"]
++                    # Keep validation/checkpoint criteria on the original
++                    # segmentation loss; the extra regularizer trains selectors.
++                    if phase == "train":
++                        loss = loss + model.naf_reg_weight * naf_regularization
++                    naf_stats = model_outputs["naf_stats"].detach() * inputs.size(0)
++                    running_naf_stats = (naf_stats if running_naf_stats is None
++                                         else running_naf_stats + naf_stats)
+                     distill_loss = outputs.new_zeros(())
+                     if distiller is not None and phase == "train":
+                         distill_loss = distiller(
+@@ -342,6 +352,11 @@
+                 "{} Loss: {:.4f} MainLoss: {:.4f} DistillLoss: {:.4f} IoU: {:.4f}".format(
+                     phase, epoch_loss, epoch_main_loss,
+                     epoch_distill_loss, epoch_acc))
++
++            logging.info("NAF regularization weight: %.6g", model.naf_reg_weight)
++            for stage, stats in zip((3, 4), (running_naf_stats / running_samples).cpu().tolist()):
++                logging.info("%s NAF P%d: %s", phase, stage,
++                             ", ".join("%s=%.6f" % pair for pair in zip(STATS_NAMES, stats)))
+ 
+             loss_list[phase].append(epoch_main_loss)
+             accuracy_list[phase].append(epoch_acc)
+@@ -497,7 +512,13 @@
+         choices=["fixed", "lff_scale"],
+         help="feature fusion mode in Conv_MLA",
+     )
++    parser.add_argument("--naf_reg_weight", type=float, default=1e-3,
++                        help="experiment 1 mean piecewise frequency-mask penalty")
+     args = parser.parse_args()
++    if args.decoder_mode != "p5_sam2unet":
++        parser.error("experiment 1 requires --decoder_mode p5_sam2unet")
++    if args.naf_reg_weight < 0:
++        parser.error("--naf_reg_weight must be nonnegative")
+     seed = args.seed
+     torch.manual_seed(seed)
+     np.random.seed(seed)
+@@ -611,6 +632,10 @@
+             model.encoder.freeze_backbone,
+             args.aux_d2_weight, args.aux_d3_weight,
+         )
++    model.naf_reg_weight = args.naf_reg_weight
++    logging.info("Experiment 1 NAF: P3/P4, keep=0.9, temperature=0.1, "
++                 "alpha_init=0.1, alpha_max=0.25, radial thirds, lambda=%.6g",
++                 args.naf_reg_weight)
+     if args.encoder_name == "mslau":
+         load_encoder_pretrained(model, args.pretrained)
+     elif args.pretrained:

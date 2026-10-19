@@ -6,7 +6,7 @@
 ```text
 experiments/
   exp00_baseline/       原始14文件＋run.py/config.json/说明
-  exp01_.../           后续创建：config.json、changes.patch、added/、README.md
+  exp01_naf_select_reg/  二维频率选择＋分段正则：config.json、changes.patch、added/、说明
 tools/
   build_experiment.py   基线＋单个实验差异 → 完整源码
   run_experiment.py     临时展开后运行，默认只预览
@@ -21,7 +21,7 @@ tools/
 对原文件的修改放标准Git文本补丁changes.patch，例如a/networks/mslau_net.py与b/networks/mslau_net.py。
 新文件放added/，保持相对路径，例如added/networks/naf.py；不能借added/覆盖原文件。
 每个实验直接相对冻结基线，不在运行时引用其他实验；必须改变基线时另建批次。
-运行前提交；工作树有未提交改动时统一入口拒绝训练。当前只有实验0，没有新NAF实现。
+运行前提交；工作树有未提交改动时统一入口拒绝训练。当前有实验0与实验1。实验1为P3/P4二维软频率选择＋分段正则，设计与验证命令见experiments/exp01_naf_select_reg/README.md；未完成真实训练。
 
 ## 环境和运行
 
