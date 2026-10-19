@@ -76,7 +76,7 @@ P2–P4对高频惩罚较弱，体现允许高频保留更多权重的先验，�
 对掩码均匀化、alpha趋于0及不同图像间是否变化做必要解释，不能只凭参数存在宣称机制有效。
 
 ```bash
-CUDA_VISIBLE_DEVICES=2 NAF_FULL_SMOKE=1 NAF_DEVICE=cuda /home/le/miniconda3/envs/mslau-p51/bin/python -m unittest discover -s tests -p 'test_exp01_naf.py' -v
+CUDA_VISIBLE_DEVICES=0 NAF_FULL_SMOKE=1 NAF_DEVICE=cuda /home/le/miniconda3/envs/mslau-p51/bin/python -m unittest discover -s tests -p 'test_exp01_naf.py' -v
 ```
 
 该命令测试三种层级配置，使用合成输入，不读取训练数据、不执行正式训练。正式批量命令见仓库README。

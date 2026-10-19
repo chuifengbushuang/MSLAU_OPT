@@ -11,7 +11,7 @@ P1的三段系数均1；它的正则没有高低频偏向，但会约束掩码�
 完整方法在仓库experiments/shared_naf_v1/README.md。展开目录自带run.py/config.json，可独立运行。
 
 ```bash
-/home/le/miniconda3/envs/mslau-p51/bin/python tools/run_experiment.py exp02_naf_p34 --seed 1234 --gpu 2 --run
+/home/le/miniconda3/envs/mslau-p51/bin/python tools/run_experiment.py exp02_naf_p34 --seed 1234 --gpu 0 --run
 ```
 
 旧exp01_naf_select_reg（73e38b8及更早）是两层且分母2，不等同于本轮新协议。旧输出不覆盖、不改名冒充新结果。

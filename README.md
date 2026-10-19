@@ -49,7 +49,7 @@ GPU占用查询失败也仅提示，是否能使用指定卡由PyTorch的CUDA检
 服务器更新代码后，先执行新版完整合成检查（三种接入配置）：
 
 ```bash
-CUDA_VISIBLE_DEVICES=2 NAF_FULL_SMOKE=1 NAF_DEVICE=cuda /home/le/miniconda3/envs/mslau-p51/bin/python -m unittest discover -s tests -p 'test_exp01_naf.py' -v
+CUDA_VISIBLE_DEVICES=0 NAF_FULL_SMOKE=1 NAF_DEVICE=cuda /home/le/miniconda3/envs/mslau-p51/bin/python -m unittest discover -s tests -p 'test_exp01_naf.py' -v
 ```
 
 全部实验三个种子依次执行，任一次失败即停止；GPU按实际选择修改：
@@ -59,7 +59,7 @@ CUDA_VISIBLE_DEVICES=2 NAF_FULL_SMOKE=1 NAF_DEVICE=cuda /home/le/miniconda3/envs
     set -e
     export P51_OUTPUT_ROOT=/data/models/le/mslau-net
     export NO_ALBUMENTATIONS_UPDATE=1
-    P51_GPU=2
+    P51_GPU=0
     for P51_EXPERIMENT in exp00_baseline exp01_naf_all exp02_naf_p34 exp03_naf_p12; do
         for P51_SEED in 1234 42 2026; do
             /home/le/miniconda3/envs/mslau-p51/bin/python -u tools/run_experiment.py "$P51_EXPERIMENT" --seed "$P51_SEED" --gpu "$P51_GPU" --run
