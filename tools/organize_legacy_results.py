@@ -53,33 +53,45 @@ def migrate(plan):
         if source.parent.name not in plan['remove_dirs'] or not source.is_relative_to(Path(plan['source_root'])):
             raise RuntimeError(f'Invalid retained source: {source}')
         records = output / 'experiments' / item['id']
-        checkpoint = output / 'checkpoints' / item['id'] / 'best_iou.pth'
+        checkpoint = output / 'checkpoints' / item['id'] / 'kvasir_best_model.pth'
         manifest = records / 'manifest.json'
         if manifest.exists():
             saved = json.loads(manifest.read_text())
-            if saved['source'] != str(source) or saved['checkpoint_sha256'] != digest(checkpoint):
+            if saved['source'] != str(source) or saved['checkpoint_sha256'] != digest(Path(saved['checkpoint'])):
                 raise RuntimeError(f'Existing migrated run does not match: {records}')
+            if set(saved.get('checkpoint_files', {})) != set(item['checkpoint_names'].values()):
+                raise RuntimeError('This run used the old single-checkpoint layout. Use restore_checkpoint_names.py; no old outputs deleted.')
+            for name, expected in saved['checkpoint_files'].items():
+                if digest(checkpoint.parent / name) != expected:
+                    raise RuntimeError(f'Migrated checkpoint changed: {name}')
             for name, expected in saved.get('copied_records_sha256', {}).items():
                 if digest(Path(name)) != expected:
                     raise RuntimeError(f'Migrated record changed: {name}')
             completed.append(saved)
             continue
-        original = source / 'checkpoints/kvasir_best_model.pth'
-        if not original.is_file() or original.stat().st_size != item['checkpoint_bytes']:
-            raise RuntimeError(f'Missing/changed retained checkpoint: {original}')
-        original_hash = digest(original)
-        # Check the retained state_dict on CPU. No model construction or training.
-        keys = subprocess.check_output([PYTHON, '-c',
-            'import sys,torch; s=torch.load(sys.argv[1],map_location="cpu",weights_only=True); '
-            'assert isinstance(s,dict) and s and all(isinstance(v,torch.Tensor) for v in s.values()); print(len(s))',
-            str(original)], text=True, env=dict(os.environ, CUDA_VISIBLE_DEVICES='')).strip()
-        if int(keys) != (1180 if item['variant'] == 'baseline' else 1200):
-            raise RuntimeError(f'Unexpected model state: {original}, keys={keys}')
         checkpoint.parent.mkdir(parents=True, exist_ok=True)
         records.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(original, checkpoint)
-        if digest(checkpoint) != original_hash:
-            raise RuntimeError(f'Copy verification failed: {checkpoint}')
+        checkpoint_files = {}
+        for name in item['checkpoint_names'].values():
+            if Path(name).name != name:
+                raise RuntimeError('Invalid checkpoint filename')
+            original = source / 'checkpoints' / name
+            expected_bytes = plan['expected_old_files'].get(str(original))
+            if not original.is_file() or original.stat().st_size != expected_bytes:
+                raise RuntimeError(f'Missing/changed retained checkpoint: {original}')
+            original_hash = digest(original)
+            # CPU state_dict check, without constructing or training a model.
+            keys = subprocess.check_output([PYTHON, '-c',
+                'import sys,torch; s=torch.load(sys.argv[1],map_location="cpu",weights_only=True); '
+                'assert isinstance(s,dict) and s and all(isinstance(v,torch.Tensor) for v in s.values()); print(len(s))',
+                str(original)], text=True, env=dict(os.environ, CUDA_VISIBLE_DEVICES='')).strip()
+            if int(keys) != (1180 if item['variant'] == 'baseline' else 1200):
+                raise RuntimeError(f'Unexpected model state: {original}, keys={keys}')
+            target = checkpoint.parent / name
+            shutil.copy2(original, target)
+            if digest(target) != original_hash:
+                raise RuntimeError(f'Copy verification failed: {target}')
+            checkpoint_files[name] = original_hash
         copied_records = {}
         for path in sorted(source.rglob('*')):
             if path.is_file() and path.suffix not in WEIGHTS:
@@ -99,7 +111,8 @@ def migrate(plan):
                 if digest(target) != copied_records[str(target)]:
                     raise RuntimeError(f'Metadata copy verification failed: {target}')
         saved = dict(item, source=str(source), checkpoint=str(checkpoint),
-                     checkpoint_sha256=original_hash, state_dict_keys=int(keys),
+                     checkpoint_sha256=checkpoint_files[checkpoint.name], state_dict_keys=int(keys),
+                     checkpoint_files=checkpoint_files,
                      copied_records_sha256=copied_records,
                      status='historical_completed', comparison_group='old_mslau_naf_only')
         manifest.write_text(json.dumps(saved, ensure_ascii=False, indent=2) + '\n')
@@ -114,7 +127,8 @@ def apply_plan(plan):
         raise RuntimeError('A Kvasir training/evaluation process is running. No files deleted.')
     check_scope(plan)
     output = Path(plan['output_root'])
-    required = sum(item['checkpoint_bytes'] for item in plan['keep']
+    required = sum(plan['expected_old_files'][str(Path(item['source']) / 'checkpoints' / name)]
+                   for item in plan['keep'] for name in item['checkpoint_names'].values()
                    if not (output / 'experiments' / item['id'] / 'manifest.json').exists())
     if shutil.disk_usage(output).free < required + 10 * 1024 * 1024:
         raise RuntimeError(f'Insufficient free space for verified migration: need about {required / 2**30:.2f} GiB')
@@ -129,8 +143,9 @@ def apply_plan(plan):
     (records / 'legacy_migration.json').write_text(json.dumps(completed, ensure_ascii=False, indent=2) + '\n')
     check_scope(plan)
     for item in completed:
-        if digest(Path(item['checkpoint'])) != item['checkpoint_sha256']:
-            raise RuntimeError('Retained model changed; old outputs not deleted')
+        for name, expected in item['checkpoint_files'].items():
+            if digest(Path(item['checkpoint']).parent / name) != expected:
+                raise RuntimeError('Retained model changed; old outputs not deleted')
         for name, expected in item.get('copied_records_sha256', {}).items():
             if digest(Path(name)) != expected:
                 raise RuntimeError('Retained record changed; old outputs not deleted')
@@ -149,7 +164,7 @@ def main():
     parser.add_argument('--apply', action='store_true')
     args = parser.parse_args()
     plan = json.loads(PLAN.read_text())
-    print('KEEP: 9 historical runs, one best-IoU model and records per run')
+    print('KEEP: 9 historical runs, all three original checkpoints and records per run')
     for item in plan['keep']:
         print(' ', item['id'], '<-', item['source'])
     print('AFTER VERIFIED MIGRATION, DELETE old directories:', ', '.join(plan['remove_dirs']))

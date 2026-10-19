@@ -48,7 +48,13 @@ tools/
 /data/models/le/mslau-net/visualization/<run_id>/ 有图才输出，实验0默认不导出预测
 ```
 
-成功训练且评估完成后只保留最佳IoU主权重，删除该run命名副本和最佳Loss权重。
+保留原脚本的三份权重及原始命名：
+
+- `kvasir_best_model.pth`：固定名称的最佳验证IoU模型，独立评估默认使用它。
+- `best_iou_<IoU>_epoch_<epoch>_<Loss>.pth`：同一最佳IoU模型的带指标名称版本。
+- `best_loss_<Loss>_epoch_<epoch>_<IoU>.pth`：最佳验证Loss模型，可能对应不同epoch。
+
+不再在训练结束后删除任何一份。
 manifest保存研究提交、基线、补丁/新增文件/源码哈希、配置和reproduce_from_repository重跑命令。
 临时源码会删除，重跑使用仓库入口，而非记录中的临时路径。
 
@@ -72,14 +78,19 @@ manifest保存研究提交、基线、补丁/新增文件/源码哈希、配置�
 
 添加--apply才执行已授权的迁移和删除，固定范围见tools/legacy_results_plan.json。
 
-- 保留旧mslau-naf的baseline、四级NAF、P3/P4 NAF各三seed，9份主权重及必要记录标history_*。
+- 保留旧mslau-naf的baseline、四级NAF、P3/P4 NAF各三seed，9次运行的三份原始命名权重及必要记录标history_*。
 - CPU检查state_dict，复制SHA256一致且全部迁移成功后才清理旧目录。
 - 其他环境重复、微调、旁路、冒烟和冗余权重留小型历史汇总，再删除清单中的旧输出。
 - 新文件/大小变化/软链接/进行中的Kvasir任务会阻止操作，不扩大删除范围。
 - 不删代码clone、Git、数据、环境或原作者成果。真实模型迁移只在服务器执行--apply时发生。
-- 可重复执行，已迁移run会复核权重哈希；首次需临时空闲空间约7.26GiB。
+- 可重复执行，已迁移run会复核权重哈希；首次迁移三份权重需临时空闲空间约21.78GiB。
 
 旧匹配均值：baseline0.869595、四级NAF0.862984、P3/P4 NAF0.867907；不能与新环境混作匹配对照。
 原环境最好观察值0.875919，原作者历史最好0.878616；旧NAF源码保留在Git历史/归档tag中。
 
 基础检查：python -m unittest discover -s tests -v，不导入模型、不用GPU、不训练。
+
+已执行旧版单权重迁移的结果，使用tools/restore_checkpoint_names.py预览，加--apply才修复命名。
+它恢复固定名称和带指标的IoU名称（新建IoU副本使用硬链接，不额外复制大文件）；
+最佳Loss只从仍存在的真实原文件恢复。已经删除且没有其他副本的最佳Loss无法还原，manifest会明确记录缺失。
+该工具不训练、不删除旧输出，不要为修复命名重新执行迁移清理。

@@ -10,7 +10,12 @@
       "best_iou": 0.869015,
       "source_commit": "49aa8b7",
       "environment": "/home/le/miniconda3/envs/mslau-naf",
-      "checkpoint_bytes": 866111534
+      "checkpoint_bytes": 866111534,
+      "checkpoint_names": {
+        "fixed": "kvasir_best_model.pth",
+        "best_iou": "best_iou_0.869015_epoch_18_0.338863.pth",
+        "best_loss": "best_loss_0.336706_epoch_17_0.863760.pth"
+      }
     },
     {
       "id": "history_baseline_seed2026",
@@ -20,7 +25,12 @@
       "best_iou": 0.868437,
       "source_commit": "49aa8b7",
       "environment": "/home/le/miniconda3/envs/mslau-naf",
-      "checkpoint_bytes": 866111534
+      "checkpoint_bytes": 866111534,
+      "checkpoint_names": {
+        "fixed": "kvasir_best_model.pth",
+        "best_iou": "best_iou_0.868437_epoch_19_0.314491.pth",
+        "best_loss": "best_loss_0.314491_epoch_19_0.868437.pth"
+      }
     },
     {
       "id": "history_baseline_seed42",
@@ -30,7 +40,12 @@
       "best_iou": 0.871332,
       "source_commit": "49aa8b7",
       "environment": "/home/le/miniconda3/envs/mslau-naf",
-      "checkpoint_bytes": 866111534
+      "checkpoint_bytes": 866111534,
+      "checkpoint_names": {
+        "fixed": "kvasir_best_model.pth",
+        "best_iou": "best_iou_0.871332_epoch_16_0.313775.pth",
+        "best_loss": "best_loss_0.313775_epoch_16_0.871332.pth"
+      }
     },
     {
       "id": "history_naf_all_seed1234",
@@ -40,7 +55,12 @@
       "best_iou": 0.863653,
       "source_commit": "49aa8b7",
       "environment": "/home/le/miniconda3/envs/mslau-naf",
-      "checkpoint_bytes": 866153394
+      "checkpoint_bytes": 866153394,
+      "checkpoint_names": {
+        "fixed": "kvasir_best_model.pth",
+        "best_iou": "best_iou_0.863653_epoch_17_0.337135.pth",
+        "best_loss": "best_loss_0.323840_epoch_15_0.863441.pth"
+      }
     },
     {
       "id": "history_naf_all_seed2026",
@@ -50,7 +70,12 @@
       "best_iou": 0.864012,
       "source_commit": "49aa8b7",
       "environment": "/home/le/miniconda3/envs/mslau-naf",
-      "checkpoint_bytes": 866153394
+      "checkpoint_bytes": 866153394,
+      "checkpoint_names": {
+        "fixed": "kvasir_best_model.pth",
+        "best_iou": "best_iou_0.864012_epoch_12_0.331668.pth",
+        "best_loss": "best_loss_0.331668_epoch_12_0.864012.pth"
+      }
     },
     {
       "id": "history_naf_all_seed42",
@@ -60,7 +85,12 @@
       "best_iou": 0.861288,
       "source_commit": "49aa8b7",
       "environment": "/home/le/miniconda3/envs/mslau-naf",
-      "checkpoint_bytes": 866153394
+      "checkpoint_bytes": 866153394,
+      "checkpoint_names": {
+        "fixed": "kvasir_best_model.pth",
+        "best_iou": "best_iou_0.861288_epoch_8_0.338641.pth",
+        "best_loss": "best_loss_0.335621_epoch_12_0.857817.pth"
+      }
     },
     {
       "id": "history_naf_p34_seed1234",
@@ -70,7 +100,12 @@
       "best_iou": 0.871696,
       "source_commit": "49aa8b7",
       "environment": "/home/le/miniconda3/envs/mslau-naf",
-      "checkpoint_bytes": 866153394
+      "checkpoint_bytes": 866153394,
+      "checkpoint_names": {
+        "fixed": "kvasir_best_model.pth",
+        "best_iou": "best_iou_0.871696_epoch_15_0.320734.pth",
+        "best_loss": "best_loss_0.315913_epoch_18_0.870076.pth"
+      }
     },
     {
       "id": "history_naf_p34_seed2026",
@@ -80,7 +115,12 @@
       "best_iou": 0.866838,
       "source_commit": "49aa8b7",
       "environment": "/home/le/miniconda3/envs/mslau-naf",
-      "checkpoint_bytes": 866153394
+      "checkpoint_bytes": 866153394,
+      "checkpoint_names": {
+        "fixed": "kvasir_best_model.pth",
+        "best_iou": "best_iou_0.866838_epoch_13_0.321552.pth",
+        "best_loss": "best_loss_0.314032_epoch_16_0.865657.pth"
+      }
     },
     {
       "id": "history_naf_p34_seed42",
@@ -90,7 +130,12 @@
       "best_iou": 0.865188,
       "source_commit": "49aa8b7",
       "environment": "/home/le/miniconda3/envs/mslau-naf",
-      "checkpoint_bytes": 866153394
+      "checkpoint_bytes": 866153394,
+      "checkpoint_names": {
+        "fixed": "kvasir_best_model.pth",
+        "best_iou": "best_iou_0.865188_epoch_19_0.338737.pth",
+        "best_loss": "best_loss_0.332260_epoch_14_0.862193.pth"
+      }
     }
   ],
   "remove_dirs": [

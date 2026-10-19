@@ -142,9 +142,9 @@ def main():
             metadata.update(best_val_iou=float(best[1]), best_epoch=int(best[2]))
         metadata['evaluation_metrics'] = {key: float(value) for key, value in re.findall(
             r'^mean ([\w-]+): ([\d.]+)', (records / 'evaluation.log').read_text(), re.M)}
-        # Training/evaluation finished. Keep only the selected best-IoU state.
-        for extra in (OUTPUT / 'checkpoints' / run_id).glob('best_*_epoch_*.pth'):
-            extra.unlink()
+        # Preserve the original script's three checkpoints and filenames.
+        metadata['checkpoint_files'] = {path.name: sha256(path)
+            for path in sorted((OUTPUT / 'checkpoints' / run_id).glob('*.pth'))}
         metadata['status'] = 'completed'
     except BaseException as error:
         metadata.update(status='failed', error=str(error))

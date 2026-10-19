@@ -17,12 +17,14 @@ ROOT = Path(__file__).resolve().parents[1]
 def load(name, path):
     spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
 
 
 baseline = load('baseline', ROOT / 'experiments/exp00_baseline/run.py')
-organize = load('organize', ROOT / 'tools/organize_legacy_results.py')
+organize = load('organize_legacy_results', ROOT / 'tools/organize_legacy_results.py')
+restore_names = load('restore_names', ROOT / 'tools/restore_checkpoint_names.py')
 builder = load('builder', ROOT / 'tools/build_experiment.py')
 
 
@@ -77,8 +79,10 @@ class WorkflowTests(unittest.TestCase):
             (source / 'checkpoints').mkdir(parents=True)
             model = source / 'checkpoints/kvasir_best_model.pth'
             model.write_bytes(b'original')
-            item = dict(id='history_baseline_seed42', source=str(source), variant='baseline', checkpoint_bytes=8)
-            plan = dict(source_root=tmp, output_root=str(root / 'outputs'), remove_dirs=['old'], keep=[item])
+            (source / 'checkpoints/best_iou_named.pth').write_bytes(b'original')
+            (source / 'checkpoints/best_loss_named.pth').write_bytes(b'bestloss')
+            item = dict(id='history_baseline_seed42', source=str(source), variant='baseline', checkpoint_bytes=8, checkpoint_names=dict(fixed='kvasir_best_model.pth', best_iou='best_iou_named.pth', best_loss='best_loss_named.pth'))
+            plan = dict(source_root=tmp, output_root=str(root / 'outputs'), remove_dirs=['old'], keep=[item], expected_old_files={str(p):p.stat().st_size for p in (source/'checkpoints').iterdir()})
             with patch.object(organize.subprocess, 'check_output', side_effect=RuntimeError('load failed')):
                 with self.assertRaises(RuntimeError):
                     organize.migrate(plan)
@@ -91,12 +95,16 @@ class WorkflowTests(unittest.TestCase):
             (source / 'checkpoints').mkdir(parents=True)
             model = source / 'checkpoints/kvasir_best_model.pth'
             model.write_bytes(b'original')
+            (source / 'checkpoints/best_iou_named.pth').write_bytes(b'original')
+            (source / 'checkpoints/best_loss_named.pth').write_bytes(b'bestloss')
             (source / 'console.log').write_text('evidence')
-            item = dict(id='history_baseline_seed42', source=str(source), variant='baseline', checkpoint_bytes=8)
-            plan = dict(source_root=tmp, output_root=str(root / 'outputs'), remove_dirs=['old'], keep=[item])
+            item = dict(id='history_baseline_seed42', source=str(source), variant='baseline', checkpoint_bytes=8, checkpoint_names=dict(fixed='kvasir_best_model.pth', best_iou='best_iou_named.pth', best_loss='best_loss_named.pth'))
+            plan = dict(source_root=tmp, output_root=str(root / 'outputs'), remove_dirs=['old'], keep=[item], expected_old_files={str(p):p.stat().st_size for p in (source/'checkpoints').iterdir()})
             with patch.object(organize.subprocess, 'check_output', return_value='1180\n'):
                 saved = organize.migrate(plan)
             self.assertEqual(Path(saved[0]['checkpoint']).read_bytes(), b'original')
+            self.assertEqual(len(saved[0]['checkpoint_files']), 3)
+            self.assertEqual((Path(saved[0]['checkpoint']).parent / 'best_loss_named.pth').read_bytes(), b'bestloss')
             self.assertEqual((root / 'outputs/experiments/history_baseline_seed42/console.log').read_text(), 'evidence')
             self.assertEqual(organize.migrate(plan), saved)
             self.assertTrue(model.exists())
@@ -112,11 +120,11 @@ class WorkflowTests(unittest.TestCase):
                 source = root / 'old' / f'baseline_{number}'
                 (source / 'checkpoints').mkdir(parents=True)
                 for name, data in [('checkpoints/kvasir_best_model.pth', b'original'),
-                                   ('checkpoints/best_loss.pth', b'discard'), ('console.log', b'evidence')]:
+                                   ('checkpoints/best_iou_named.pth', b'original'), ('checkpoints/best_loss_named.pth', b'bestloss'), ('console.log', b'evidence')]:
                     path = source / name
                     path.write_bytes(data)
                     expected[str(path)] = len(data)
-                keep.append(dict(id=f'history_{number}', source=str(source), variant='baseline', checkpoint_bytes=8))
+                keep.append(dict(id=f'history_{number}', source=str(source), variant='baseline', checkpoint_bytes=8, checkpoint_names=dict(fixed='kvasir_best_model.pth', best_iou='best_iou_named.pth', best_loss='best_loss_named.pth')))
             plan = dict(source_root=tmp, output_root=str(output), remove_dirs=['old'], remove_files=[],
                         expected_old_files=expected, keep=keep, historical_summary=[{'status': 'summary'}])
             def commands(command, **kwargs):
@@ -126,7 +134,7 @@ class WorkflowTests(unittest.TestCase):
                     organize.apply_plan(plan)
                     organize.apply_plan(plan)
             self.assertFalse((root / 'old').exists())
-            self.assertEqual(len(list((output / 'checkpoints').glob('*/best_iou.pth'))), 9)
+            self.assertEqual(len(list((output / 'checkpoints').glob('*/kvasir_best_model.pth'))), 9)
             self.assertEqual(len(list((output / 'experiments').glob('*/console.log'))), 9)
 
     def test_failed_migration_never_reaches_deletion(self):
@@ -143,6 +151,59 @@ class WorkflowTests(unittest.TestCase):
                 with self.assertRaises(RuntimeError):
                     organize.apply_plan(plan)
             self.assertEqual(log.read_text(), 'preserve')
+
+
+class RestoreNamesTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.directory = self.root / 'outputs/checkpoints/history_test'
+        self.directory.mkdir(parents=True)
+        self.primary = self.directory / 'best_iou.pth'
+        self.primary.write_bytes(b'iou state')
+        self.record = self.root / 'outputs/experiments/history_test/manifest.json'
+        self.record.parent.mkdir(parents=True)
+        self.record.write_text(json.dumps(dict(checkpoint=str(self.primary), checkpoint_sha256=organize.digest(self.primary))))
+        self.source = self.root / 'old/checkpoints'
+        self.source.mkdir(parents=True)
+        self.names = dict(fixed='kvasir_best_model.pth', best_iou='best_iou_named.pth', best_loss='best_loss_named.pth')
+        self.plan = dict(output_root=str(self.root / 'outputs'), expected_old_files={},
+                         keep=[dict(id='history_test', source=str(self.source.parent), checkpoint_names=self.names)])
+
+    def test_preview_preserves_single_file(self):
+        with contextlib.redirect_stdout(io.StringIO()):
+            restore_names.restore(self.plan)
+        self.assertEqual(list(self.directory.iterdir()), [self.primary])
+
+    def test_missing_loss_is_not_fabricated_and_apply_is_repeatable(self):
+        with contextlib.redirect_stdout(io.StringIO()):
+            restore_names.restore(self.plan, True)
+            restore_names.restore(self.plan, True)
+        fixed = self.directory / self.names['fixed']
+        named = self.directory / self.names['best_iou']
+        self.assertEqual(fixed.read_bytes(), b'iou state')
+        self.assertEqual(fixed.stat().st_ino, named.stat().st_ino)
+        self.assertFalse((self.directory / self.names['best_loss']).exists())
+        self.assertFalse(self.primary.exists())
+        self.assertEqual(json.loads(self.record.read_text())['missing_checkpoints'], [self.names['best_loss']])
+
+    def test_real_distinct_loss_is_recovered(self):
+        loss = self.source / self.names['best_loss']
+        loss.write_bytes(b'distinct loss state')
+        self.plan['expected_old_files'][str(loss)] = loss.stat().st_size
+        with contextlib.redirect_stdout(io.StringIO()):
+            restore_names.restore(self.plan, True)
+            restore_names.restore(self.plan, True)
+        self.assertEqual((self.directory / loss.name).read_bytes(), b'distinct loss state')
+        self.assertEqual(len(json.loads(self.record.read_text())['checkpoint_files']), 3)
+
+    def test_conflict_stops_before_rename(self):
+        (self.directory / self.names['best_iou']).write_bytes(b'wrong model')
+        with self.assertRaises(RuntimeError):
+            restore_names.restore(self.plan, True)
+        self.assertTrue(self.primary.exists())
+        self.assertFalse((self.directory / self.names['fixed']).exists())
 
 
 class BuildTests(unittest.TestCase):
