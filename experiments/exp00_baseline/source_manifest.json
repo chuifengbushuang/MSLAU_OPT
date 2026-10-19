@@ -1,0 +1,31 @@
+{
+  "source_commit": "81b19e2c801efcf74826b8127f5ea712b0247ec5",
+  "modified_original_files": [],
+  "added_files": [
+    "run.py",
+    "README.md",
+    "config.json",
+    "source_manifest.json"
+  ],
+  "files": {
+    "kvasir_train.py": "5844351ea4fb796ddfe37c3e449478b29f1fcfbbae5d4b278becbfd8c38bae29",
+    "kvasir_test.py": "0d5a6cf673028e755a2d675624a3118add60af26d3cad5e08352e334898c03d2",
+    "loader.py": "bbcc158933d86325f159f708509e260af4d004b8e34e62edd72d2e5d505069f7",
+    "loss.py": "a8fd98eda2a80093937aaf0adc06607af1d25b2a54894aaa1eb962f1e2b2d31f",
+    "requirements.txt": "9d66129d1229916a4067fa114cf8f305380066c333b0c086dd0cb342374600fc",
+    "environment.yml": "514433c14ccdd3b8c78d1b38e0a9afc130988eba8034a17e4e4028ec32e4ff55",
+    "networks/mslau_net.py": "7680c63379d49e153bd9528f67f1b89c1c353506165cc96c56730cf09f48ce9b",
+    "networks/msla.py": "ba5bf9404746b89769478df8b6aaa9821ed3b401914e50cee12dab909108322d",
+    "networks/linear_attention.py": "2e47049468a9ef82b30a85475ef33c2d5a135f4dc11ea0b1e168abeb8312fa5c",
+    "networks/edge_guidance.py": "4f4ba0a3a1a0725bf5ecbd07c9cc6d6bf70c170b5937c352018b5598866278be",
+    "configs/splits/kvasir/manifest.json": "f710dd12583a49c0a659e2d5b158344f1f2cca3c144c5ff1b82f981d59e0b3ec",
+    "configs/splits/kvasir/train.txt": "1f35939a3883e07adc87fb57416b60adb4a3205cbf88975b8ba8e59b27caa89e",
+    "configs/splits/kvasir/val.txt": "d44d1076cf2820e72f6c05beeb8767cf55ba6a03ecefd5dd8752e7588ff767e2",
+    "configs/splits/kvasir/test.txt": "d44d1076cf2820e72f6c05beeb8767cf55ba6a03ecefd5dd8752e7588ff767e2"
+  },
+  "controls": {
+    "run.py": "7d9b20d3411d1e337612edd1c87074f36f11a334b325129d6a73d1adb778508b",
+    "config.json": "61d2726c2c643c948b7dfc297881795dfc2f38fc7b6c05ea6c5f698e9220171f",
+    "README.md": "640478e0173b2840a5702abf4401f5565ca4768a7e3158ff9e1da8508886cff4"
+  }
+}
