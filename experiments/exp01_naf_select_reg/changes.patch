@@ -3,18 +3,18 @@
 @@ -7,6 +7,7 @@
  from timm.layers import trunc_normal_, DropPath, to_2tuple
  import copy
- 
+
 +from networks.naf_select_reg import BudgetNAF2D
  from networks.msla import MSLA
  from networks.edge_guidance import EdgeGuidedAttention
- 
+
 @@ -870,6 +871,8 @@
          self.side1 = nn.Conv2d(channels, num_classes, 1)
          self.side2 = nn.Conv2d(channels, num_classes, 1)
          self.head = nn.Conv2d(channels, num_classes, 1)
 +        self.naf_p3 = BudgetNAF2D(scale_index=3)
 +        self.naf_p4 = BudgetNAF2D(scale_index=4)
- 
+
      @staticmethod
      def resize_logits(logits, output_size):
 @@ -881,6 +884,8 @@
@@ -33,8 +33,8 @@
 +            "naf_regularization": (reg3 + reg4) * 0.5,
 +            "naf_stats": torch.stack([stats3, stats4]),
          }
- 
- 
+
+
 --- a/kvasir_train.py
 +++ b/kvasir_train.py
 @@ -28,6 +28,7 @@
@@ -42,7 +42,7 @@
  )
  from networks.mslau_net import MSLAU_net
 +from networks.naf_select_reg import STATS_NAMES
- 
+
  if platform.system() != "Windows":
      pathlib.WindowsPath = pathlib.PosixPath
 @@ -261,6 +262,7 @@
@@ -50,7 +50,7 @@
              running_distill_loss = 0.0
              running_samples = 0
 +            running_naf_stats = None
- 
+
              for inputs, labels, _ in dataloaders[phase]:
                  if torch.cuda.is_available():
 @@ -315,6 +317,14 @@
@@ -77,7 +77,7 @@
 +            for stage, stats in zip((3, 4), (running_naf_stats / running_samples).cpu().tolist()):
 +                logging.info("%s NAF P%d: %s", phase, stage,
 +                             ", ".join("%s=%.6f" % pair for pair in zip(STATS_NAMES, stats)))
- 
+
              loss_list[phase].append(epoch_main_loss)
              accuracy_list[phase].append(epoch_acc)
 @@ -497,7 +512,13 @@

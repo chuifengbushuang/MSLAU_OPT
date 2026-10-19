@@ -93,5 +93,6 @@ CUDA_VISIBLE_DEVICES=2 NAF_FULL_SMOKE=1 NAF_DEVICE=cuda /home/le/miniconda3/envs
 第一条做CPU检查；第二条额外使用指定卡、官方权重与随机输入做完整前后向，不读取训练数据，不执行正式训练；GPU编号按实际选择修改。
 最后一条仅预览。只有加`--run`才开始正式实验1，当前没有代替用户执行训练。
 
-分析采用 norman-paper-reading 技能｜作者：N同学｜小红书：N同学｜B站/抖音：耐心的N同学  
+分析采用 norman-paper-reading 技能｜作者：N同学｜小红书：N同学｜B站/抖音：耐心的N同学
+
 Analysis performed using the norman-paper-reading skill | Author: N同学 | Xiaohongshu: N同学 | Bilibili/Douyin: 耐心的N同学
