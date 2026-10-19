@@ -6,7 +6,10 @@
 ```text
 experiments/
   exp00_baseline/       原始14文件＋run.py/config.json/说明
-  exp01_naf_select_reg/  二维频率选择＋分段正则：config.json、changes.patch、added/、说明
+  exp01_naf_all/        四层完整模型配置
+  exp02_naf_p34/        仅P3/P4配置
+  exp03_naf_p12/        仅P1/P2配置
+  shared_naf_v1/        三个NAF实验共用的changes.patch、added/和方法说明
 tools/
   build_experiment.py   基线＋单个实验差异 → 完整源码
   run_experiment.py     临时展开后运行，默认只预览
@@ -21,7 +24,9 @@ tools/
 对原文件的修改放标准Git文本补丁changes.patch，例如a/networks/mslau_net.py与b/networks/mslau_net.py。
 新文件放added/，保持相对路径，例如added/networks/naf.py；不能借added/覆盖原文件。
 每个实验直接相对冻结基线，不在运行时引用其他实验；必须改变基线时另建批次。
-运行前提交；工作树有未提交改动时统一入口拒绝训练。当前有实验0与实验1。实验1为P3/P4二维软频率选择＋分段正则，设计与验证命令见experiments/exp01_naf_select_reg/README.md；未完成真实训练。
+仅接入位置不同的实验用source_definition=shared_naf_v1复用同一份冻结差异源码。构建时复制实际代码，导出后独立，不引用别的实验目录。
+运行前提交；工作树有未提交改动时统一入口拒绝训练。当前实验0为原始基线，实验1四层，实验2仅P3/P4，实验3仅P1/P2。方法和归约见experiments/shared_naf_v1/README.md。
+所有NAF实验固定R=sum(启用层R_n)/4，lambda=0.001。旧exp01_naf_select_reg是分母2的历史版本，不混入新协议。
 
 ## 环境和运行
 
@@ -40,6 +45,31 @@ tools/
 加--run才训练并独立评估；入口显示并记录所选GPU占用，已有进程、显存占用或利用率不会阻止训练。
 GPU占用查询失败也仅提示，是否能使用指定卡由PyTorch的CUDA检查确认。
 三seed按1234、42、2026各一次，不挑最高重复拼基线。
+
+服务器更新代码后，先执行新版完整合成检查（三种接入配置）：
+
+```bash
+CUDA_VISIBLE_DEVICES=2 NAF_FULL_SMOKE=1 NAF_DEVICE=cuda /home/le/miniconda3/envs/mslau-p51/bin/python -m unittest discover -s tests -p 'test_exp01_naf.py' -v
+```
+
+全部实验三个种子依次执行，任一次失败即停止；GPU按实际选择修改：
+
+```bash
+(
+    set -e
+    export P51_OUTPUT_ROOT=/data/models/le/mslau-net
+    export NO_ALBUMENTATIONS_UPDATE=1
+    P51_GPU=2
+    for P51_EXPERIMENT in exp00_baseline exp01_naf_all exp02_naf_p34 exp03_naf_p12; do
+        for P51_SEED in 1234 42 2026; do
+            /home/le/miniconda3/envs/mslau-p51/bin/python -u tools/run_experiment.py "$P51_EXPERIMENT" --seed "$P51_SEED" --gpu "$P51_GPU" --run
+        done
+    done
+)
+```
+
+共12次正式训练/独立评估；若实验0三seed已完成，可从列表移除exp00_baseline，复用现有结果。旧NAF结果不能替代新协议的实验2。
+
 
 ## 输出与完整导出
 

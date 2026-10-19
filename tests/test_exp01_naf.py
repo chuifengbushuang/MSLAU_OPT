@@ -1,4 +1,4 @@
-"""Exp01 numerical and rendered-source integration checks; no dataset training.
+"""NAF v1 numerical, stage-ablation and rendered-source integration checks; no dataset training.
 
 CPU: python -m unittest discover -s tests -p 'test_exp01_naf.py' -v
 Optional server full model: NAF_FULL_SMOKE=1 NAF_DEVICE=cuda <same command>
@@ -54,13 +54,21 @@ class NAFTests(unittest.TestCase):
         cls.temporary = tempfile.TemporaryDirectory(prefix='exp01_test_')
         cls.source = Path(cls.temporary.name) / 'source'
         builder = load('exp01_builder', ROOT / 'tools/build_experiment.py')
-        cls.build_manifest = builder.build('exp01_naf_select_reg', cls.source)
+        cls.variants = {'exp01_naf_all': (1, 2, 3, 4), 'exp02_naf_p34': (3, 4),
+                        'exp03_naf_p12': (1, 2)}
+        cls.sources = {}
+        cls.manifests = {}
+        for experiment in cls.variants:
+            target = Path(cls.temporary.name) / experiment
+            cls.manifests[experiment] = builder.build(experiment, target)
+            cls.sources[experiment] = target
+        cls.source = cls.sources['exp01_naf_all']
         cls.naf = load('exp01_naf', cls.source / 'networks/naf_select_reg.py')
         cls.class_names = ['BasicConv2d', 'RFBModified', 'SAM2UNetUp', 'SAM2UNetDecoder']
         cls.original = definitions(BASE / 'networks/mslau_net.py', cls.class_names,
                                    dict(torch=torch, nn=nn, F=F))
         cls.rendered = definitions(cls.source / 'networks/mslau_net.py', cls.class_names,
-                                   dict(torch=torch, nn=nn, F=F, BudgetNAF2D=cls.naf.BudgetNAF2D))
+                                   dict(torch=torch, nn=nn, F=F, PyramidNAF2D=cls.naf.PyramidNAF2D))
 
     @classmethod
     def tearDownClass(cls):
@@ -142,40 +150,113 @@ class NAFTests(unittest.TestCase):
         torch.manual_seed(1234)
         original = self.original['SAM2UNetDecoder'](**options)
         original_rng = torch.get_rng_state()
+        for stages in self.variants.values():
+            torch.manual_seed(1234)
+            experiment = self.rendered['SAM2UNetDecoder'](**options, naf_stages=stages)
+            torch.testing.assert_close(torch.get_rng_state(), original_rng, rtol=0, atol=0)
+            for name, value in original.state_dict().items():
+                torch.testing.assert_close(experiment.state_dict()[name], value, rtol=0, atol=0)
+            new_names = set(experiment.state_dict()) - set(original.state_dict())
+            self.assertTrue(all(name.startswith('frequency_enhancer.stages.') for name in new_names))
+            self.assertEqual(sum(p.numel() for p in experiment.parameters()) -
+                             sum(p.numel() for p in original.parameters()), 82 * len(stages))
+
+    def test_configs_share_source_and_only_change_stage_switch(self):
+        baseline = json.loads((BASE / 'config.json').read_text())
+        source_hashes = None
+        for experiment, stages in self.variants.items():
+            with self.subTest(experiment=experiment):
+                source = self.sources[experiment]
+                config = json.loads((source / 'config.json').read_text())
+                train_options = config['train_options'].copy()
+                evaluation = config['eval_options'].copy()
+                expected_switch = ','.join(str(stage) for stage in stages)
+                self.assertEqual(train_options.pop('naf_stages'), expected_switch)
+                self.assertEqual(evaluation.pop('naf_stages'), expected_switch)
+                self.assertEqual(train_options.pop('naf_reg_weight'), 0.001)
+                self.assertEqual(train_options, baseline['train_options'])
+                self.assertEqual(evaluation, baseline['eval_options'])
+                hashes = {name: value for name, value in self.manifests[experiment]['files'].items()
+                          if name.endswith('.py')}
+                if source_hashes is None:
+                    source_hashes = hashes
+                self.assertEqual(hashes, source_hashes)
+                launcher = load('variant_launcher', source / 'run.py')
+                train, evaluate = launcher.commands(1234, 'preview')
+                for command in (train, evaluate):
+                    self.assertEqual(command[command.index('--naf_stages') + 1], expected_switch)
+
+    def test_stage_ablation_keeps_fixed_regularizer_denominator(self):
         torch.manual_seed(1234)
-        experiment = self.rendered['SAM2UNetDecoder'](**options)
-        torch.testing.assert_close(torch.get_rng_state(), original_rng, rtol=0, atol=0)
-        for name, value in original.state_dict().items():
-            torch.testing.assert_close(experiment.state_dict()[name], value, rtol=0, atol=0)
-        new_names = set(experiment.state_dict()) - set(original.state_dict())
-        self.assertTrue(all(name.startswith(('naf_p3.', 'naf_p4.')) for name in new_names))
-        self.assertEqual(sum(p.numel() for p in experiment.parameters()) -
-                         sum(p.numel() for p in original.parameters()), 164)
+        all_stages = self.naf.PyramidNAF2D((1, 2, 3, 4))
+        features = [torch.randn(2, 4, size, size) for size in (88, 44, 22, 11)]
+        penalties = {stage: all_stages.stages['p%d' % stage](features[stage - 1])[1]
+                     for stage in range(1, 5)}
+        _, full_regularizer, _ = all_stages(features)
+        torch.testing.assert_close(full_regularizer, sum(penalties.values()) / 4)
+        for stages in ((3, 4), (1, 2)):
+            torch.manual_seed(1234)
+            partial = self.naf.PyramidNAF2D(stages)
+            # Matching enabled modules retain identical initialization.
+            for name, value in partial.state_dict().items():
+                torch.testing.assert_close(value, all_stages.state_dict()[name], rtol=0, atol=0)
+            enhanced, regularizer, stats = partial(features)
+            torch.testing.assert_close(regularizer, sum(penalties[n] for n in stages) / 4)
+            self.assertEqual(stats.shape, (len(stages), 7))
+            self.assertEqual(set(partial.stages), {'p%d' % n for n in stages})
+            for n in range(1, 5):
+                if n not in stages:
+                    self.assertIs(enhanced[n - 1], features[n - 1])
+            stage = stages[0]
+            target = 'p%d' % stage
+            full_gradient, = torch.autograd.grad(full_regularizer,
+                all_stages.stages[target].selector[-1].weight, retain_graph=True)
+            partial_gradient, = torch.autograd.grad(regularizer,
+                partial.stages[target].selector[-1].weight)
+            torch.testing.assert_close(full_gradient, partial_gradient, rtol=1e-5, atol=1e-7)
+
+    def test_stage_one_regularizer_is_frequency_neutral(self):
+        _, _, bands, weights = self.naf.frequency_geometry(88, 88, 'cpu', torch.float32)
+        coefficients = 1.0 ** (-(bands + 1).float())
+        torch.testing.assert_close(coefficients, torch.ones_like(coefficients))
+        module = self.naf.BudgetNAF2D(1)
+        _, regularizer, _ = module(torch.randn(2, 4, 88, 88))
+        torch.testing.assert_close(regularizer, torch.tensor(0.81))
+
+    def test_invalid_stage_switch_is_rejected(self):
+        for value in ('', '0', '1,1', '1,5', '../other', '3.0'):
+            with self.assertRaises(ValueError):
+                self.naf.parse_stages(value)
+        self.assertEqual(self.naf.parse_stages('4,3'), (3, 4))
 
     def test_rendered_decoder_aux_optimizer_and_strict_reload(self):
         decoder_class = self.rendered['SAM2UNetDecoder']
         options = dict(encoder_channels=(4, 8, 16, 32), channels=8)
-        model = decoder_class(**options)
-        inputs = [torch.randn(2, c, s, s) for c, s in zip((4, 8, 16, 32), (88, 44, 22, 11))]
-        optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
-        parameter_ids = {id(p) for group in optimizer.param_groups for p in group['params']}
-        self.assertTrue(all(id(p) in parameter_ids for p in model.naf_p3.parameters()))
-        output = model(inputs, 352, return_aux=True)
-        for name in ['logits', 'aux_d2', 'aux_d3']:
-            self.assertEqual(output[name].shape, (2, 1, 352, 352))
-        self.assertEqual(output['naf_stats'].shape, (2, 7))
-        (sum(output[key].square().mean() for key in ['logits', 'aux_d2', 'aux_d3']) +
-         1e-3 * output['naf_regularization']).backward()
-        self.assertIsNotNone(model.naf_p4.selector[-1].weight.grad)
-        buffer = io.BytesIO()
-        torch.save(model.state_dict(), buffer)
-        buffer.seek(0)
-        restored = decoder_class(**options)
-        restored.load_state_dict(torch.load(buffer, map_location='cpu', weights_only=True), strict=True)
-        model.eval()
-        restored.eval()
-        with torch.no_grad():
-            torch.testing.assert_close(model(inputs, 352), restored(inputs, 352), rtol=0, atol=0)
+        inputs = [torch.randn(2, c, size, size) for c, size in zip((4, 8, 16, 32), (88, 44, 22, 11))]
+        for stages in self.variants.values():
+            with self.subTest(stages=stages):
+                model = decoder_class(**options, naf_stages=stages)
+                optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+                parameter_ids = {id(p) for group in optimizer.param_groups for p in group['params']}
+                self.assertTrue(all(id(p) in parameter_ids for p in model.frequency_enhancer.parameters()))
+                output = model(inputs, 352, return_aux=True)
+                for name in ['logits', 'aux_d2', 'aux_d3']:
+                    self.assertEqual(output[name].shape, (2, 1, 352, 352))
+                self.assertEqual(output['naf_stats'].shape, (len(stages), 7))
+                (sum(output[key].square().mean() for key in ['logits', 'aux_d2', 'aux_d3']) +
+                 1e-3 * output['naf_regularization']).backward()
+                for module in model.frequency_enhancer.stages.values():
+                    self.assertIsNotNone(module.selector[-1].weight.grad)
+                    self.assertTrue(torch.isfinite(module.selector[-1].weight.grad).all())
+                buffer = io.BytesIO()
+                torch.save(model.state_dict(), buffer)
+                buffer.seek(0)
+                restored = decoder_class(**options, naf_stages=stages)
+                restored.load_state_dict(torch.load(buffer, map_location='cpu', weights_only=True), strict=True)
+                model.eval()
+                restored.eval()
+                with torch.no_grad():
+                    torch.testing.assert_close(model(inputs, 352), restored(inputs, 352), rtol=0, atol=0)
 
     def test_rendered_training_loss_and_three_checkpoint_contract(self):
         namespace = dict(torch=torch, nn=nn, F=F, copy=copy, os=os, time=time, logging=logging,
@@ -183,7 +264,7 @@ class NAFTests(unittest.TestCase):
                          log_fusion_scale_stats=lambda *args: None)
         definitions(self.source / 'kvasir_train.py',
                     ['snapshot_state_dict', 'atomic_save_state_dict', 'train_model', 'make_boundary_target'], namespace)
-        naf_type = self.naf.BudgetNAF2D
+        naf_type = self.naf.PyramidNAF2D
 
         class TinyModel(nn.Module):
             decoder_mode = 'p5_sam2unet'
@@ -191,12 +272,12 @@ class NAFTests(unittest.TestCase):
 
             def __init__(self):
                 super().__init__()
-                self.naf = naf_type(3)
+                self.progressive_decoder = nn.Module()
+                self.progressive_decoder.frequency_enhancer = naf_type((1, 2, 3, 4))
 
             def forward(self, x, **kwargs):
-                output, penalty, stats = self.naf(x)
-                return dict(logits=output, naf_regularization=penalty,
-                            naf_stats=torch.stack([stats, stats]))
+                output, penalty, stats = self.progressive_decoder.frequency_enhancer([x] * 4)
+                return dict(logits=output[0], naf_regularization=penalty, naf_stats=stats)
 
         model = TinyModel()
         features = torch.randn(2, 1, 11, 11)
@@ -218,7 +299,7 @@ class NAFTests(unittest.TestCase):
 
     @unittest.skipUnless(os.environ.get('NAF_FULL_SMOKE') == '1', 'optional real Hiera smoke not requested')
     def test_full_hiera_model(self):
-        # This path is explicitly opt-in and uses only synthetic tensors.
+        # Explicit opt-in; all three configurations use only synthetic inputs.
         checkpoint = os.environ.get('HIERA_CHECKPOINT',
             '/data/models/zsy/mslau-net/pretrained/sam2_hiera_large.fb_r1024.safetensors')
         self.assertTrue(Path(checkpoint).is_file(), checkpoint)
@@ -226,24 +307,34 @@ class NAFTests(unittest.TestCase):
         sys.path.insert(0, str(self.source))
         try:
             from networks.mslau_net import MSLAU_net
-            model = MSLAU_net(img_size=352, decoder_mode='p5_sam2unet',
-                              encoder_name='sam2_hiera_large', hiera_checkpoint=checkpoint).to(device)
-            self.assertTrue(model.encoder.freeze_backbone)
-            encoder_trainable = [name for name, p in model.encoder.named_parameters() if p.requires_grad]
-            self.assertTrue(encoder_trainable)
-            self.assertTrue(all('.prompt_learn.' in name for name in encoder_trainable))
-            groups = [[p for p in model.encoder.parameters() if p.requires_grad],
-                      [p for name, p in model.named_parameters() if not name.startswith('encoder.')]]
-            optimizer = torch.optim.AdamW([dict(params=params, lr=1e-3) for params in groups])
-            owned = {id(p) for group in optimizer.param_groups for p in group['params']}
-            self.assertTrue(all(id(p) in owned for p in model.progressive_decoder.naf_p3.parameters()))
-            output = model(torch.randn(2, 3, 352, 352, device=device), return_aux=True)
-            loss = sum(output[key].square().mean() for key in ['logits', 'aux_d2', 'aux_d3'])
-            (loss + 1e-3 * output['naf_regularization']).backward()
-            for module in [model.progressive_decoder.naf_p3, model.progressive_decoder.naf_p4]:
-                for p in module.parameters():
+
+            def check_variant(stages):
+                model = MSLAU_net(img_size=352, decoder_mode='p5_sam2unet',
+                                  encoder_name='sam2_hiera_large', hiera_checkpoint=checkpoint,
+                                  naf_stages=stages).to(device)
+                self.assertTrue(model.encoder.freeze_backbone)
+                trainable = [name for name, p in model.encoder.named_parameters() if p.requires_grad]
+                self.assertTrue(trainable)
+                self.assertTrue(all('.prompt_learn.' in name for name in trainable))
+                groups = [[p for p in model.encoder.parameters() if p.requires_grad],
+                          [p for name, p in model.named_parameters() if not name.startswith('encoder.')]]
+                optimizer = torch.optim.AdamW([dict(params=params, lr=1e-3) for params in groups])
+                owned = {id(p) for group in optimizer.param_groups for p in group['params']}
+                enhancer = model.progressive_decoder.frequency_enhancer
+                self.assertEqual(enhancer.active_stages, stages)
+                self.assertTrue(all(id(p) in owned for p in enhancer.parameters()))
+                output = model(torch.randn(2, 3, 352, 352, device=device), return_aux=True)
+                loss = sum(output[key].square().mean() for key in ['logits', 'aux_d2', 'aux_d3'])
+                (loss + 1e-3 * output['naf_regularization']).backward()
+                for p in enhancer.parameters():
                     self.assertIsNotNone(p.grad)
                     self.assertTrue(torch.isfinite(p.grad).all())
+
+            for stages in self.variants.values():
+                with self.subTest(stages=stages):
+                    check_variant(stages)
+                    if device.type == 'cuda':
+                        torch.cuda.empty_cache()
         finally:
             sys.path.remove(str(self.source))
             for name in list(sys.modules):

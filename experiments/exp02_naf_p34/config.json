@@ -1,5 +1,5 @@
 {
-  "id": "exp01_naf_select_reg",
+  "id": "exp02_naf_p34",
   "base_commit": "81b19e2c801efcf74826b8127f5ea712b0247ec5",
   "train_options": {
     "decoder_mode": "p5_sam2unet",
@@ -15,6 +15,7 @@
     "aux_d2_weight": 1.0,
     "aux_d3_weight": 1.0,
     "boundary_weight": 0.0,
+    "naf_stages": "3,4",
     "naf_reg_weight": 0.001
   },
   "eval_options": {
@@ -23,6 +24,8 @@
     "img_size": 352,
     "batch": 8,
     "num_workers": 0,
-    "debug": "false"
-  }
+    "debug": "false",
+    "naf_stages": "3,4"
+  },
+  "source_definition": "shared_naf_v1"
 }

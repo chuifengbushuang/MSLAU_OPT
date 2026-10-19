@@ -1,4 +1,4 @@
-"""Experiment 1: budgeted 2-D frequency selection with piecewise regularization.
+"""NAF v1: budgeted 2-D selection shared by the full model and stage ablations.
 
 Adaptation of NAF-MSNN, not a reproduction of its time-series sampling/fusion.
 No dependencies beyond torch. FFT and selection use FP32 under autocast.
@@ -7,6 +7,9 @@ import math
 
 import torch
 from torch import nn
+
+
+REGULARIZATION_DENOMINATOR = 4.0
 
 
 STATS_NAMES = ('keep_low', 'keep_mid', 'keep_high', 'alpha', 'regularizer',
@@ -124,3 +127,34 @@ class BudgetNAF2D(nn.Module):
             # Diagnostics must not keep a graph or alter the regularizer gradient.
             stats = torch.stack([*band_means, alpha, penalty, std, mean]).detach()
         return output.to(original_dtype), penalty, stats
+
+
+def parse_stages(value):
+    """Canonical anatomical indices; disabling stages never renumbers them."""
+    stages = tuple(int(part) for part in value.split(',')) if isinstance(value, str) else tuple(value)
+    if not stages or len(set(stages)) != len(stages) or any(stage not in (1, 2, 3, 4) for stage in stages):
+        raise ValueError('NAF stages must be distinct indices from 1,2,3,4')
+    return tuple(sorted(stages))
+
+
+class PyramidNAF2D(nn.Module):
+    """Independent selectors at configured levels; no cross-level fusion."""
+
+    def __init__(self, active_stages=(1, 2, 3, 4)):
+        super().__init__()
+        self.active_stages = parse_stages(active_stages)
+        self.stages = nn.ModuleDict({
+            'p%d' % stage: BudgetNAF2D(scale_index=stage) for stage in self.active_stages
+        })
+
+    def forward(self, features):
+        enhanced = list(features)
+        penalties, diagnostics = [], []
+        for stage in self.active_stages:
+            enhanced[stage - 1], penalty, stats = self.stages['p%d' % stage](features[stage - 1])
+            penalties.append(penalty)
+            diagnostics.append(stats)
+        # Fixed anatomical denominator, NOT mean over active modules. Removing
+        # one module removes its term without increasing other modules' weights.
+        regularizer = torch.stack(penalties).sum() / REGULARIZATION_DENOMINATOR
+        return enhanced, regularizer, torch.stack(diagnostics)

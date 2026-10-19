@@ -45,13 +45,24 @@ def build(experiment, output):
     config = json.loads(config_path.read_text())
     if config['id'] != experiment or config['base_commit'] != source['source_commit']:
         raise ValueError('Experiment id/base_commit does not match the frozen baseline')
+    source_name = config.get('source_definition')
+    if source_name is not None:
+        # Reuse a frozen patch/module set, never another experiment's config or
+        # runtime directory. The materialized result has no shared-file imports.
+        if not isinstance(source_name, str) or not re.fullmatch(r'shared_[a-z0-9_]+', source_name):
+            raise ValueError('Shared source definition must be named shared_<name>')
+        source_definition = ROOT / 'experiments' / source_name
+        if source_definition.is_symlink() or not source_definition.is_dir():
+            raise ValueError('Shared source definition must be an existing ordinary directory')
+    else:
+        source_definition = definition
     output = Path(output).absolute()
     if output.exists() or output.is_symlink():
         raise FileExistsError(f'Output already exists; nothing overwritten: {output}')
-    if output.is_relative_to(BASE) or output.is_relative_to(definition):
+    if output.is_relative_to(BASE) or output.is_relative_to(definition) or output.is_relative_to(source_definition):
         raise ValueError('Build output must be outside experiment definitions')
-    patch = definition / 'changes.patch'
-    added = definition / 'added'
+    patch = source_definition / 'changes.patch'
+    added = source_definition / 'added'
     original_names = set(source['files']) | {'run.py'}
     if patch.is_symlink() or added.is_symlink():
         raise ValueError('Patch/added directory must not be a symlink')
@@ -107,6 +118,7 @@ def build(experiment, output):
         revision = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
         dirty = bool(subprocess.check_output(['git', 'status', '--porcelain'], cwd=ROOT, text=True).strip())
         manifest = dict(experiment=experiment, source_commit=source['source_commit'],
+                        source_definition=source_name or experiment,
                         repository_commit=revision, worktree_dirty=dirty,
                         patch_sha256=patch_hash, config_sha256=digest(config_path),
                         added_files=added_hashes, files=files)

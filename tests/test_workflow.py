@@ -293,6 +293,34 @@ class BuildTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('Preview only', result.stdout)
 
+    def test_shared_source_export_is_independent_of_its_definition(self):
+        definition = self.define()
+        config_path = definition / 'config.json'
+        config = json.loads(config_path.read_text())
+        config['source_definition'] = 'shared_example'
+        config_path.write_text(json.dumps(config))
+        shared = self.root / 'experiments/shared_example'
+        (shared / 'added/networks').mkdir(parents=True)
+        (shared / 'added/networks/shared_example.py').write_text('VALUE = 42\n')
+        output = Path(self.temporary.name) / 'shared_export'
+        result = builder.build('exp01_example', output)
+        self.assertEqual(result['source_definition'], 'shared_example')
+        self.assertEqual((output / 'networks/shared_example.py').read_text(), 'VALUE = 42\n')
+        shutil.rmtree(self.root)
+        run = subprocess.run([sys.executable, str(output / 'run.py')], cwd=output,
+                             text=True, capture_output=True)
+        self.assertEqual(run.returncode, 0, run.stderr)
+
+    def test_shared_source_reference_cannot_escape_or_use_another_experiment(self):
+        definition = self.define()
+        config_path = definition / 'config.json'
+        config = json.loads(config_path.read_text())
+        for reference in ('../outside', 'exp00_baseline', '/tmp/shared_other'):
+            config['source_definition'] = reference
+            config_path.write_text(json.dumps(config))
+            with self.assertRaises(ValueError):
+                builder.build('exp01_example', Path(self.temporary.name) / 'rejected')
+
     def test_patch_and_added_files_are_applied_without_changing_baseline(self):
         definition = self.define()
         original = (self.base / 'kvasir_train.py').read_bytes()
