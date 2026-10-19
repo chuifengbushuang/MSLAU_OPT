@@ -50,6 +50,56 @@ class WorkflowTests(unittest.TestCase):
                 baseline.main()
             child.assert_not_called()
 
+    def test_occupied_gpu_allows_training_and_preserves_three_checkpoints(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp)
+            launched = []
+
+            def query(command, **kwargs):
+                if command[0] == 'nvidia-smi':
+                    return 'GPU 2: 3545 MiB used, utilization 55%, PID 120355\n'
+                return 'mock runtime or environment\n'
+
+            class Child:
+                def __init__(self, command, **kwargs):
+                    launched.append(command)
+                    if '--output_dir' in command:
+                        directory = Path(command[command.index('--output_dir') + 1])
+                        for name in ['kvasir_best_model.pth', 'best_iou_0.87_epoch_19_0.3.pth',
+                                     'best_loss_0.3_epoch_18_0.86.pth']:
+                            (directory / name).write_bytes(name.encode())
+                        self.stdout = ['Best val IoU: 0.87 at epoch 19\n']
+                    else:
+                        self.stdout = ['mean IoU: 0.87\n']
+
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *args):
+                    pass
+
+                def wait(self):
+                    return 0
+
+            with patch('sys.argv', ['run.py', '--gpu', '2', '--run']), \
+                 patch.object(baseline, 'OUTPUT', output), \
+                 patch.object(baseline, 'DATASET', tmp), patch.object(baseline, 'HIERA', __file__), \
+                 patch.object(baseline.subprocess, 'check_output', side_effect=query), \
+                 patch.object(baseline.subprocess, 'Popen', side_effect=Child), \
+                 contextlib.redirect_stdout(io.StringIO()) as console:
+                baseline.main()
+            self.assertEqual(len(launched), 2)
+            self.assertIn('informational only', console.getvalue())
+            manifest = json.loads(next((output / 'experiments').glob('*/manifest.json')).read_text())
+            self.assertEqual(manifest['status'], 'completed')
+            self.assertEqual(len(manifest['checkpoint_files']), 3)
+            self.assertEqual(len(list((output / 'checkpoints').glob('*/*.pth'))), 3)
+
+    def test_gpu_query_failure_is_informational(self):
+        with patch.object(baseline.subprocess, 'check_output', side_effect=FileNotFoundError('nvidia-smi')), \
+             contextlib.redirect_stdout(io.StringIO()):
+            self.assertIn('unavailable', baseline.gpu_snapshot(0))
+
     def test_cleanup_scope_rejects_changed_or_new_files(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

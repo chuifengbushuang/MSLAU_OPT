@@ -37,7 +37,8 @@ tools/
 /home/le/miniconda3/envs/mslau-p51/bin/python tools/run_experiment.py exp00_baseline --seed 1234 --gpu 0
 ```
 
-加--run才训练并独立评估；先检查空闲GPU，入口也检查该卡进程、显存和利用率。
+加--run才训练并独立评估；入口显示并记录所选GPU占用，已有进程、显存占用或利用率不会阻止训练。
+GPU占用查询失败也仅提示，是否能使用指定卡由PyTorch的CUDA检查确认。
 三seed按1234、42、2026各一次，不挑最高重复拼基线。
 
 ## 输出与完整导出
@@ -88,6 +89,7 @@ manifest保存研究提交、基线、补丁/新增文件/源码哈希、配置�
 旧匹配均值：baseline0.869595、四级NAF0.862984、P3/P4 NAF0.867907；不能与新环境混作匹配对照。
 原环境最好观察值0.875919，原作者历史最好0.878616；旧NAF源码保留在Git历史/归档tag中。
 
+历史整理和命名修复工具只手动使用，不参与训练流程。
 基础检查：python -m unittest discover -s tests -v，不导入模型、不用GPU、不训练。
 
 已执行旧版单权重迁移的结果，使用tools/restore_checkpoint_names.py预览，加--apply才修复命名。

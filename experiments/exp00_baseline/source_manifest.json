@@ -24,7 +24,7 @@
     "configs/splits/kvasir/test.txt": "d44d1076cf2820e72f6c05beeb8767cf55ba6a03ecefd5dd8752e7588ff767e2"
   },
   "controls": {
-    "run.py": "ffc8e6665b12c5146a6a4e7682ad873f3dfba97c21335953aa5a3f6920798e55",
+    "run.py": "489d9c20b481101026a888a0eafa0b3068bb23313b7f289d97576fdc04839524",
     "config.json": "61d2726c2c643c948b7dfc297881795dfc2f38fc7b6c05ea6c5f698e9220171f",
     "README.md": "ce010b3577c7251e536abb8df658150a3e2d5f1e8f3fa977fdc5adb6989015c2"
   }
