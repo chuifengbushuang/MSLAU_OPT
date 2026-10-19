@@ -1,5 +1,6 @@
 import argparse
 import copy
+import json
 import logging
 import os
 import pathlib
@@ -529,6 +530,11 @@ if __name__ == "__main__":
     log_dir = resolve_path(args.log_dir)
     os.makedirs(output_dir, exist_ok=True)
     configure_logging(log_dir)
+    # Record resolved CLI defaults as well as explicitly supplied arguments.
+    # Metadata only: no model, augmentation or RNG changes.
+    with open(os.path.join(log_dir, "parsed_args.json"), "w", encoding="utf-8") as stream:
+        json.dump(vars(args), stream, ensure_ascii=False, indent=2)
+        stream.write("\n")
     logging.info("Random seed: %d", seed)
 
     train_files = load_ids(train_txt)

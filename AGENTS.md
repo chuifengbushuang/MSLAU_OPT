@@ -3,10 +3,11 @@
 > 本文件是 Codex 的长期项目记忆。每次代码修改或实验完成后都必须更新。
 > 本文件位于 Git 仓库根目录，是 Mac、`.120`、`.194` 三端同步时的唯一权威版本。
 > `handover.md` 仅用于一次性交接本轮对话，不替代本文件。
-> 最近更新：2026-10-13。
+> 最近更新：2026-10-19。
 
 ## 1. 长期目标
 
+- 2026-10-19 用户明确当前第一目标：设计NAF，使其在同环境、同协议的匹配对照中稳定优于baseline；历史0.878616的精确复现为第二目标，不作为新模块研究的前提。最终交付含none/NAF开关、完整配置和证据的同一套代码，由原实验者在其环境复验；不承诺跨环境必然提升。
 - 在 Kvasir-SEG、CVC-ClinicDB 上提高 MSLAU-Net 的分割 mIoU。
 - 所有改动必须通过受控实验验证，不能只凭训练 Loss 或单次峰值判断有效。
 - 明确区分 P0、P2、LFF、Dropout、数据划分和训练策略带来的影响。
@@ -60,6 +61,17 @@ ps -u zsy -o pid,etime,cmd | grep -E 'python.*(train|kvasir)' | grep -v grep
 ```
 
 历史上 GPU 1、2 常被他人占用，GPU 0、3 较常空闲，但必须以现场检查为准。曾发生并行训练导致显存占满、GPU 利用率为 0；恢复单任务、batch32、`num_workers=8` 后正常。
+
+### le 账号后续输出约定（2026-10-19 用户指定）
+
+- 模型权重：`/data/models/le/mslau-net/checkpoints/<run_id>/`。
+- 实验记录：`/data/models/le/mslau-net/experiments/<run_id>/`，训练日志放其中的`logs/`；启动命令、完整解析参数、代码commit/diff、环境/运行时、输入哈希、逐轮指标和评估结果均归此处。
+- 可视化：`/data/models/le/mslau-net/visualization/<run_id>/`，曲线及固定样本预测对照按需生成。
+- 三处使用同一唯一run_id，包含方案、seed、重复编号及时间；实验manifest记录三个绝对路径、权重选择指标/epoch/哈希及运行状态。汇总索引建议放`experiments/index.csv`。
+- 用户已在服务器创建三个根目录。后续推荐入口`python -m tools.run_experiment`自动分配三类目录，生成manifest与加锁index.jsonl；透传旧训练/评估CLI，不改变模型及训练保存策略。直接调用旧脚本仍兼容，但不会自动统一布局。入口支持dry-run、独立repo/python、单卡预检、源码/环境/输入哈希及完成/失败记录；完整用法见`docs/experiment_outputs.md`。
+- 所有运行（包括失败/负向）的轻量记录保留；关键基线、对照和最终方案各seed的最佳IoU权重保留，不只保留最高分一次。探索权重清理前先列清单并确认记录完整及引用关系。现有原代码可能重复保存同一最佳模型；核对模型内容后才制定去重操作，不能仅凭文件名或字节哈希判定。
+- 原始预训练权重保持原路径，以路径及内容哈希引用。当前checkpoint为模型state_dict，不包含完整断点恢复状态；需要恢复训练时须另外实现optimizer/scheduler/epoch/随机状态等保存。
+- 用户本轮未要求立即删除或搬迁旧文件；不得据此批量清理。后续无需重复激活环境或cd；每次要求用户运行下一步时附可执行命令。
 
 ## 4. 当前网络与训练语义
 
@@ -124,7 +136,7 @@ gamma = 4.0 * torch.softmax(fusion_logits, dim=0)
 
 每通道四路权重和为 4，初始均为 1。复现早期加法式 LFF 时必须恢复对应旧代码，不能只复用当前参数名。
 
-### 当前统一训练标准
+### 历史 legacy 训练参考（不适用于P5.1/NAF）
 
 ```text
 Loss：0.5 * BCEWithLogitsLoss + 0.5 * DiceLoss
@@ -195,9 +207,19 @@ split：/home/zsy/projects/mslau-net/configs/splits/cvc_official_csv_fold0
 
 ## 6. 当前最佳结果
 
-2026-10-13 NAF2D第二轮仅完成设计审计与合成复测，未正式训练；以下最佳分割结果不变。
+2026-10-15 已读取用户回传的 P5.1/NAF2D 三 seed 训练、独立验证评估和真实特征诊断。
+历史最佳结果保留在下表；当前环境的匹配对照为 P5.1 **0.869595±0.001532**、
+四级 NAF2D **0.862984±0.001480**（样本标准差，seed42/1234/2026）。
+NAF 三个 seed 均下降，平均下降 0.006610；后续应以当前匹配基线判断收益，不能把历史 0.878616 单次峰值作为唯一对照。
+阶段消融 seed1234 已完成：仅 P1/P2 为0.866889，仅 P3/P4 为0.871696。
+P3/P4-only 补齐 seed42/2026 后为 **0.867907±0.003383**，相对匹配 baseline 均值下降0.001687，
+仅1/3 seed提升，未通过预设的初步支持条件；不升级为有效配置。
+0.874656同权重微调对照已完成：none为0.875457，P3/P4 NAF为0.871617，NAF低0.003840。
+这是独立的单seed微调结果，不与从官方Hiera开始的三seed均值混排，历史最佳三seed结果保留。
 
 ### Kvasir
+
+2026-10-19 环境对照另行归档：同一原始代码、seed1234各重复2次，原环境均值0.873476±0.003455、当前环境0.871155±0.002638（重复运行样本标准差，非三seed统计）。原环境有探索性优势但范围重叠，未确认环境因果或复现历史0.878616；不得用这组同seed均值替换下表历史三seed统计。
 
 | 模型 | 最佳 val mIoU | Epoch | 结论 |
 |---|---:|---:|---|
@@ -528,6 +550,132 @@ GitHub 远程仓库：`chuifengbushuang/MSLAU_OPT`。zsy 已配置 GitHub SSH �
 - 结论：无分割/边界/去噪收益结论，当前最佳结果不变；历史3090真实1180键加载与20新键迁移证据继续有效，本轮未在3090重跑，新脚本目标环境复测待补。
 - 证据：起点4199ebc，分支feat/p5-naf-frequency-enhancement；docs/frequency_enhancement/audit_v2_cpu.xml、audit_v2_5070ti.xml、audit_v2_5070ti.json和audit_v2_evidence.sha256；verification_report追加本轮，不覆盖原始证据；handover.md仍缺失。
 
+### 2026-10-15：P5.1/四级 NAF 三 seed 与真实特征诊断归档
+
+- 假设：RFB 后四级独立 NAF 能在不改 P5.1 其余训练配置的情况下提供稳定分割收益；本次同时检查退化是否伴随门控大面积饱和或残差系数异常增大。
+- 具体操作：读取用户同步的六组完整训练日志、最佳 checkpoint 的独立验证评估、三个 NAF checkpoint 的 alpha 和 120 张验证图像逐图频域统计；本机未启动训练、未修改模型或随机性设置。
+- 控制变量：Kvasir 880/120、352、batch12、workers8、Structure Loss 三头等权、AdamW（Adapter/decoder LR1e-3、weight decay5e-4）、cosine、无 warmup、20 epochs；NAF 四级启用、alpha 初始0.1、reg=0。训练代码49aa8b7；同环境、预训练及 split 哈希。Albumentations 增强序列不保证逐步一致，按用户决定以重复 seed 评价，不追求历史轨迹逐步复刻。
+- 训练结果：seed42/1234/2026 baseline best IoU 为0.871332@16 / 0.869015@18 / 0.868437@19；NAF 为0.861288@8 / 0.863653@17 / 0.864012@12。均值与样本标准差分别0.869595±0.001532、0.862984±0.001480；逐 seed 差为-0.010044 / -0.005362 / -0.004425。独立评估的三 seed 平均 Dice 为0.9236→0.9188，Recall0.9448→0.9384；Precision0.9187→0.9167。均值指标据四位小数评估日志计算。
+- 诊断结果：三个 NAF 模型均严格加载1200键、无 missing/unexpected，逐图统计覆盖相同120个不同样本且数值有限。alpha 范围0.1091～0.1272，未接近上界。P1/P2/P3/P4 的每 seed 平均相对输出 L2 变化范围依次为4.40%～4.88% / 3.53%～3.97% / 3.82%～4.12% / 1.73%～3.63%；已乘 alpha。门控权重距0.5/1.5边界小于0.01的比例，各阶段各 seed 的均值均≤0.288%，单图最大0.852%。P1～P3三个 seed 均表现为低频平均M<1、中高频平均M>1；P4三个频段平均M均<1。这些是未乘 alpha、非能量加权的门控均值，不等价于具体频段能量变化或阶段因果贡献。
+- 结论：否定“当前四级配置有稳定收益”，暂不支持用大面积门控饱和或模块完全不起作用解释退化。先做仅 P1/P2（1,1,0,0）和仅 P3/P4（0,0,1,1）的两组 seed1234 探索性训练，唯一变量为启用阶段；仍从官方 Hiera 初始化，不从已训练 baseline/NAF checkpoint 续训。单 seed 只用于筛选，有候选收益后补 seed42/2026；恢复到 baseline 以下不算有效提升。尚未执行该阶段消融。
+- 证据：本地父目录中的 naf_training_HYrMUMN0、naf_seeds42_2026_lhNT5iVg、p51_review_YvvoiuPi、naf_diagnosis_NcEnvNFa、naf_features_BGbBNFsn；服务器对应父目录为 /home/le/WorkSpace/20261012_PolypSegmentation。训练 checkpoint 均为各 run 下 checkpoints/kvasir_best_model.pth；seed1234 位于第一目录，seed42/2026 位于第二目录。当前用户环境为 le 账号的 mslau-naf，用户已在仓库根目录，后续命令无需重复激活或 cd；每次提出需用户执行的下一步须附具体命令。
+
+### 2026-10-15：NAF 阶段消融 seed1234（用户执行并回传）
+
+- 假设：四级全部启用可能不是适合当前任务的配置；比较仅 P1/P2 和仅 P3/P4，以阶段开关为唯一训练配置变量。
+- 具体操作：读取 naf_stages_fSUUEZf4 两组完整20 epoch 训练日志和最佳 checkpoint 独立验证评估；本机未训练、未修改模型。
+- 控制变量：训练代码49aa8b7、无代码差异、环境与前一轮相同；官方 Hiera 及 train/val split 三个 SHA256 值相同（哈希文件仅绝对/相对路径文本不同）。参数与先前 naf_all_seed1234 逐项核对，仅 frequency_enabled_stages、output_dir、log_dir 不同。seed1234、352、batch12、workers8、三头等权 Structure Loss、Adapter/decoder LR1e-3、AdamW weight decay5e-4、cosine、无 warmup、20 epochs、alpha初始0.1、reg=0 均保持一致；从官方 Hiera 初始化，无 init_checkpoint。
+- 结果：P1/P2-only best IoU **0.866889@12**，Dice0.9199、Precision0.9180、Recall0.9417，最后5轮val IoU均值0.86356，最终train/val为0.9023/0.8655，21m47s。P3/P4-only best IoU **0.871696@15**，Dice0.9235、Precision0.9198、Recall0.9378，最后5轮均值0.86960，最终train/val为0.9017/0.8703，22m20s。两个 checkpoint 均严格加载1200键，启用开关与训练一致、无 missing/unexpected。最后5轮统计据四位小数日志计算。
+- 对比：同 seed baseline best IoU0.869015、最后5轮均值0.86402，四级 NAF best0.863653。P1/P2-only 对 baseline 为-0.002126；P3/P4-only 对 baseline 为+0.002681、对四级 NAF 为+0.008043，最后5轮均值对 baseline 为+0.00558。P3/P4-only 的 Precision 对 baseline0.9253下降0.0055，Recall对0.9368升0.0010；不能宣称所有指标改善。
+- 结论：P3/P4-only 出现值得复核的单 seed 正信号，不能据此断言浅层有害或证明因果机制；不立即组合正则、alpha/LR 等修改。下一步只补该配置的 seed42/2026，每组仍20 epochs。预先以三 seed 平均IoU高于匹配 baseline0.869595、至少2/3 seed逐项提升作为初步支持条件，同时报告样本标准差、Dice/Precision/Recall；n=3不等于统计显著或外部泛化。尚未执行补种子。
+- 证据：本地 /home/lien/WorkSpace/PolypSegmentation/naf_stages_fSUUEZf4；远程 /home/le/WorkSpace/20261012_PolypSegmentation/naf_stages_fSUUEZf4；各组 command.txt、logs/kvasir_train.log、console.log、evaluation_command.txt、evaluation.log。最佳权重为各组 checkpoints/kvasir_best_model.pth。GPU快照中P3/P4启动时其他任务位于GPU1/2，不将其耗时与FPS差异解释为模块效果。
+
+### 2026-10-15：原分支与当前 none 基线的语义复核
+
+- 用户问题：原代码独立复现0.874656高于当前seed1234 baseline0.869015，是否接入NAF时改变了基线。
+- 复核：直接比较81b19e2与49aa8b7。训练文件新增frequency参数、可选初始化和reg分支；none、reg=0且无init_checkpoint时不启用这些新增计算。loader、loss、split、Hiera/Adapter实现未改，优化器/调度/监督语义未改。两次启动参数的有效训练配置一致，pip freeze逐字一致、官方Hiera及split哈希相同；路径与新增关闭开关不同。
+- 边界：源码文件有差异，不能称逐文件原封不动。none不实例化NAF、不新增参数或FFT；已有独立原版decoder测试验证相同初始化/权重和输入下三头逐元素一致，不能扩大成“完整训练轨迹已逐步验证一致”。输入探针已证实增强序列不固定，但不把两次最终差距全部归因某个已量化原因，也不因单次原分支结果较高就判定其期望性能更强。
+- 开启NAF：RFB→NAF→原U形decoder，形状和接口兼容；训练时原有Adapter/RFB/decoder继续更新，NAF改变特征与反向梯度，Hiera主干继续冻结。训练后关闭NAF不能恢复一个独立训练baseline的权重。当前baseline确为frequency_mode=none，不是naf2d全阶段关闭。
+- 数值：原分支独立复现0.874656比当前baseline高0.005641；P3/P4候选0.871696比该原分支运行低0.002960，因此其+0.002681只相对当前匹配baseline，尚不能称超过该原代码复现或历史0.878616。
+- 下一步：不新增训练配置，用原分支checkpoint在当前none代码评估、当前none checkpoint在原分支代码评估，分别应与已有评估0.8747、0.8690核对。这项完整模型交叉评估尚未执行，不写作通过；已启动的补种子任务保持原配置。
+
+### 2026-10-15：原分支/当前 none 完整模型交叉评估通过；规划同权重微调对照
+
+- 假设：加入NAF接口未改变none模式下完整模型的评估指标；进一步探索从原分支复现0.874656的强起点加入NAF是否有收益。
+- 具体操作与结果：读取p51_cross_eval_orkQm2hg两份日志。原分支0.874656权重在当前none代码下为IoU0.8747、Dice0.9275、Accuracy0.9774、Precision0.9306、Recall0.9381、F1 0.9275；当前baseline权重在原代码下为IoU0.8690、Dice0.9222、Accuracy0.9757、Precision0.9253、Recall0.9368、F1 0.9222。两次交叉评估各自与已有评估的六项均值和标准差在日志显示精度下全部一致；当前代码严格加载1180键、无missing/unexpected。
+- 结论边界：支持这两份checkpoint在两套代码中的完整推理指标一致，不等价于逐图logits逐元素验证或完整训练轨迹一致。原先两次独立训练差距不能解释为“当前评估代码把相同权重算低”。
+- 新协议（尚未执行）：按用户要求，以original_p51_seed1234_tclaP5zu/checkpoints/kvasir_best_model.pth为同一初始化，比较none继续训练与naf2d仅P3/P4（0,0,1,1）微调。两组seed1234、各额外20 epochs、Adapter/decoder LR均1e-4、cosine、无warmup、batch12、352、workers8、三头Structure Loss等权、weight decay5e-4；NAF alpha初始0.1、reg=0。1e-4是较小微调学习率的经验起点，未称最优。沿用官方Hiera参数及冻结方式，但init_checkpoint随后载入全部1180个已训练参数/缓冲项；仅NAF的20项为新初始化（实现仍实例化四级，启用两级）。
+- 公平比较：none与NAF均从完全相同的0.874656 checkpoint初始化，额外训练预算与优化器/调度重建协议相同；init_checkpoint不恢复optimizer/scheduler，因此属于二阶段微调而非断点续训。分别比较微调对照和原始0.874656，不能把延长训练收益全部归于NAF，也不与从官方Hiera开始的三seed均值混排。单seed探索，结论仍需重复验证；原来的P3/P4补种子任务保持原配置。
+- 证据：本地/home/lien/WorkSpace/PolypSegmentation/p51_cross_eval_orkQm2hg；服务器对应目录/home/le/WorkSpace/20261012_PolypSegmentation/p51_cross_eval_orkQm2hg；训练CLI现有--init_checkpoint与严格/审计式迁移接口可执行新协议，无需修改模型代码。输出计划为新建p51_ckpt_finetune_XXXXXXXX目录，原checkpoint保留。
+
+### 2026-10-15：P3/P4-only 补齐 seed42/2026，三 seed 未通过
+
+- 假设：检验seed1234的0.871696单次正信号能否重复；预设条件为三seed平均IoU高于baseline0.869595且至少2/3 seed提升。
+- 具体操作：读取用户同步naf_p34_seeds42_2026_88uaX1ZS，核对两个训练各880/120样本、完整20 epochs、最佳checkpoint严格加载1200键且无missing/unexpected。代码49aa8b7、code_diff.patch为空、环境与前轮逐字一致，Hiera和split哈希相同；启动参数相对P3/P4 seed1234仅seed与输出路径不同。无init_checkpoint，均从官方Hiera预训练初始化。
+- 控制变量：仅P3/P4开启（0,0,1,1）、alpha初始0.1、reg=0、352、batch12、workers8、三头等权Structure Loss、Adapter/decoder LR1e-3、AdamW weight decay5e-4、cosine、无warmup、20 epochs；本机未训练或改模型。
+- 结果：seed42 best IoU **0.865188@19**，Dice0.9211、Precision0.9255、Recall0.9331，最后5轮IoU均值0.86250、最终train/val0.8996/0.8652，22m08s。seed2026 best IoU **0.866838@13**，Dice0.9229、Precision0.9226、Recall0.9368，最后5轮均值0.86490、最终train/val0.9046/0.8651，22m02s。结合seed1234的0.871696@15，三seed均值 **0.867907±0.003383**（样本标准差）。
+- 对比：baseline seed42/1234/2026为0.871332/0.869015/0.868437，P3/P4-only逐seed差为 **-0.006144 / +0.002681 / -0.001599**，平均-0.001687（-0.1687个百分点），只有1/3提升。P3/P4均值高于四级NAF0.862984，但仍低于baseline0.869595。三seed平均Dice0.9236→0.9225、Precision0.9187→0.9226、Recall0.9448→0.9359（据四位小数独立评估日志）；均值表现更偏Precision、以Recall降低为代价，不能由汇总值断定小目标或边界是具体退化来源。
+- 结论：未通过预设初步支持条件，seed1234的正信号没有得到另两seed支持；当前从官方Hiera训练的四级配置与P3/P4-only均无稳定正收益。不再扩展相同配置的重复种子或据此宣称改进；三seed观测波动较baseline大，不宣称稳定性提高。下一步优先回收此前已授权的0.874656同checkpoint两组微调对照，作为独立探索协议；其结果尚未同步，不假定已执行或完成，不据本次失败擅自停止已启动任务。
+- 证据：本地/home/lien/WorkSpace/PolypSegmentation/naf_p34_seeds42_2026_88uaX1ZS；服务器对应/home/le/WorkSpace/20261012_PolypSegmentation/naf_p34_seeds42_2026_88uaX1ZS。seed1234在naf_stages_fSUUEZf4/naf_p34_seed1234。原始command.txt、logs/kvasir_train.log、console.log、evaluation.log、environment.txt、input_hashes.txt均保留；用户后续查询微调进度用只读命令，避免重复启动。
+
+### 2026-10-15：0.874656同权重微调对照完成，当前NAF仍无正收益
+
+- 假设：较强的完整P5.1初始化可能使新增P3/P4 NAF有正收益；以同checkpoint继续训练的none作为匹配对照，控制额外训练预算。
+- 具体操作：读取用户同步p51_ckpt_finetune_NDtNP2kW。两组初始化路径相同，起点SHA256为975734e08eb664a4d40db703988d4e7ff9ab9b73c6f732e282869daf5ffdd08b；都加载1180旧键，none无missing，NAF仅缺预期20个新键、无unexpected。代码49aa8b7、diff为空、环境与上轮一致。启动参数只在frequency_mode和输出路径上不同，880/120样本、完整20 epochs，最佳checkpoint独立评估严格加载通过。
+- 控制变量：seed1234、从original_p51_seed1234_tclaP5zu/checkpoints/kvasir_best_model.pth初始化、额外20 epochs、Adapter/decoder LR1e-4、AdamW weight decay5e-4、cosine、无warmup、352、batch12、workers8、三头Structure Loss等权；NAF仅P3/P4、alpha初始0.1、reg=0，优化器/调度重新初始化，Hiera主干继续冻结。
+- 结果：none微调best IoU **0.875457@14**，Dice0.9283、Precision0.9301、Recall0.9402，最后5轮val均值0.87242、最后10轮0.87231，最终train/val0.9126/0.8709，24m27s。NAF微调best IoU **0.871617@0**，Dice0.9255、Precision0.9222、Recall0.9432，最后5轮0.87030、最后10轮0.86921，最终train/val0.9099/0.8707，24m16s。epoch0已包含一次完整训练轮次，不等于插入NAF后未训练时的评估；本次没有训练前的NAF初始评分。
+- 对比：none对原始起点0.874656峰值略升0.000801（+0.0801个百分点）；NAF对匹配none为-0.003840（-0.3840个百分点），对原始起点为-0.003039（-0.3039个百分点）。NAF对none的Dice低0.0028、Precision低0.0079、Recall高0.0030（据四位小数评估日志），不支持用NAF带来整体提升。
+- 结论：当前P3/P4配置在这一较强起点的联合微调中也没有正收益，不能把前述失败简单归为baseline起点低。单seed微调不作普遍无效或统计显著性结论；结合从官方Hiera训练的三seed失败，不再扩展相同配置训练。下一步只做现有NAF最佳checkpoint的推理旁路诊断：全部旁路、仅P3、仅P4，与已有P3/P4同时开启的0.871617比较，辅助定位门控当前直接作用；这不是独立重训消融，不能代替none训练结果，也不能单独证明退化原因。尚未执行旁路诊断，不宣称关闭后一定恢复。
+- 证据：本地/home/lien/WorkSpace/PolypSegmentation/p51_ckpt_finetune_NDtNP2kW，服务器对应/home/le/WorkSpace/20261012_PolypSegmentation/p51_ckpt_finetune_NDtNP2kW；两组command.txt、logs/kvasir_train.log、console.log、evaluation.log；最佳checkpoint均为各组checkpoints/kvasir_best_model.pth。原始checkpoint与两组微调checkpoint均保留。
+
+### 2026-10-15：微调checkpoint旁路结果与原论文机制复核
+
+- 具体操作：读取p51_finetune_bypass_OPA0VuO1三次旁路和原P3/P4开启日志；使用同一NAF微调最佳checkpoint（已训练一轮后的epoch0），代码49aa8b7、严格加载1200键，参数开关为全旁路/仅P3/仅P4/两者开启。
+- 结果：四组在日志显示精度下均为IoU0.8716、Dice/F1 0.9255、Accuracy0.9780、Precision0.9222、Recall0.9432；Recall标准差全旁路0.0884、其他0.0883，不能称逐图结果或logits完全一致。旁路后未在汇总指标上恢复原始0.8747或匹配微调baseline0.8755。
+- 结论：不支持把微调退化直接归因于该checkpoint推理时的门控；也不能由四位小数汇总同分断言NAF完全无作用、权重未更新或门控恒为1。其他可训练权重/BN状态、训练轨迹与门控的联合适应均可能相关，原因未隔离。停止继续扩展同一配置训练，不自动改算法或启动新实验。
+- 原文复核：完整阅读用户提供的Hu et al. IEEE TASE 2025论文主要正文，目视核对Fig.3/4/5与Table I/IV/V/VI/VII/VIII。NAF-MSNN是工业时序软测量整网，NAF子模块的核心为时间FFT、GAP→Linear→sigmoid→频率轴softmax、约90%概率抽样、尺度/频段相关分段L2约束、Linear/Padding/IFFT；整网还有多尺度卷积、随机跨尺度交换及GRU。现有二维方案改为连续有界软门控、幅值/坐标MLP、全频保留和近恒等残差；现有正则为对M偏离1的惩罚且正式训练lambda=0。它不是原算法的等价二维实现。
+- 定位边界：最终定位附件50722e64明确仅借鉴单尺度过滤过程，禁止原跨尺度交换/GRU，并明确接受软门控和默认reg=0；这些是共同确认的工程/研究取舍，不是漏实现。当前实验检验的是新的二维适配假设，失败不等于否定原论文；不能以原整网效果背书当前NAF有效。后续先澄清可迁移机制和最小对照，再决定是否重设门控，不再把继续调开关当原机制复现。
+- 原文效果：主比较热电MAE/RMSE/R²=0.052/0.058/0.871，聚丙烯0.029/0.038/0.881，PTA0.218/0.275/0.754。Table VII聚丙烯R²为MSNN+GRU0.547→固定去掉10%高频0.721→自适应Select0.825→加入交换0.881；PTA0.583→0.674→0.726→0.754。整网与单NAF贡献必须区分，不能将R²与本项目IoU混比。原文有尺度偏置文字相反、复数GAP及采样梯度/补零索引未完整定义等复现歧义，未获取作者可运行实现，不声称已复现原文结果。
+- 证据：p51_finetune_bypass_OPA0VuO1；原PDF papers/Noise_Adaptive_Filtering_Neural_Network_Under_Multiscale_Features.pdf，SHA256 f67d4904456946e642a1d3d4c7a40d3398cc9dc692d7a5ed9d6d1d1c94dd58f3。方法说明补入docs/frequency_enhancement/method_design.md；本轮只更新记录/解释，无模型变更，无新增训练要求。
+
+### 2026-10-16：历史 0.878616 原始训练日志与原分支 0.874656 复现审计
+
+- 当前目标：用户优先复现原始 P5.1，暂不实施上一轮提出的 NAF 软选择/分段正则改造。已提供原分支 seed1234 独立重复3次的命令；尚未收到这3次结果，不宣称已经启动或完成。
+- 证据：用户同步历史目录 `kvasir_p5a_sam2unet_hiera_l_blockadapter32_rfb64_structure_352_b12_e20_seed1234_gpu0_nw8_20260811_0906`，其中仅有 `train_console.log`、`logs/kvasir_train.log` 两个文件，checkpoint目录为空；无实际启动命令、运行环境快照或输入哈希。对照 `original_p51_seed1234_tclaP5zu` 的两份日志和已有command/environment/input_hashes。
+- 操作：只读解析双方全部20轮；各自console与带时间戳日志的逐轮train/valid指标、学习率、最终best汇总一致；两次console的启动配置头逐字一致，两个参数组共40个学习率值全部一致且符合20轮无warmup的cosine序列。6602594至81b19e2的训练、模型、loader、loss、split及环境声明文件diff仍为空。本轮未修改模型或启动训练。
+- 已确认：seed1234、880/120样本计数、sam2_hiera_large/p5_sam2unet、block_prompt瓶颈32、主干冻结、RFB64、输入352、aux D2/D3均1、edge=False、fusion=fixed、dropout0；总参数216419043、可训练4269747、Adapter1714416。样本计数相同不证明数据内容相同；batch12/workers8/Structure Loss由目录名和历史实验记录支持，原始日志未打印完整args，不能把所有启动参数均视为已被运行日志独立核实。
+- 结果：历史best IoU **0.878616@17**、best主头val loss0.304569@17；复现best IoU **0.874656@14**、best主头val loss0.324911@18。峰值差0.003960（0.3960个百分点）。最后5轮val IoU均值分别 **0.87534/0.86888**，最后3轮0.877833/0.869733，均基于四位小数逐轮日志，不是跨运行统计。最后一轮train/val为0.9062/0.8766与0.9021/0.8679；历史14/20轮val较高，后期优势并非单轮孤立尖峰。
+- 诊断边界：Epoch0已经经历完整一轮训练，不能用其差异证明初始权重不同。历史训练21m24s、复现28m04s，存在吞吐差异但不足以归因于GPU型号、卡数、库版本或AMP/TF32。日志没有记录这些运行时条件，亦没有记录实际预训练文件哈希、完整初始可训练参数、数据内容或增强随机状态；未定位唯一原因。此前历史checkpoint在当前环境复评仍为0.8786的证据继续有效。
+- 下一步：保持原配置重复基线，并索取原实验环境实际导出和能找到的原始启动命令。若需要核对权重，建议在服务器CPU比较历史/复现checkpoint中排除prompt_learn后的`encoder.backbone.*`冻结参数/缓冲项内容指纹；无需上传checkpoint。整份训练后checkpoint哈希不同不能用来判定官方初始化不同。该指纹检查尚未执行。
+- 产物：父目录 `analysis/p51_original_08786_vs_repro_08746_20261016/epoch_comparison.csv`、`comparison_summary.json`，含逐轮对照、两组学习率、原日志SHA256、已确认配置与未记录项；原文件保持原样。
+
+### 2026-10-16：取得原实验者启动命令，有效训练参数与0.874656复现一致
+
+- 新证据：用户提供原启动命令，工作目录`/home/zsy/projects/mslau-net`，解释器`/home/zsy/miniconda3/envs/mslau-net/bin/python`，CUDA_VISIBLE_DEVICES=0；命令输出目录仍以`<RUN_NAME>`占位，不视为逐字历史shell记录。
+- 操作：从81b19e2源码的argparse定义安全构造解析器，补齐默认值后，与`original_p51_seed1234_tclaP5zu/command.txt`全部参数逐项比较。差异仅为train_txt/val_txt相对或绝对路径、output_dir/log_dir保存位置，以及disable_edge_guidance布尔值；其余解析结果完全一致，包括batch12、workers8、Structure Loss、352、20 epochs、seed1234、两组LR1e-3、D2/D3=1、boundary=0。未显式传入的warmup=0、fusion=fixed、dropout=0均与复现一致。分支内train/val内容SHA256与已有复现输入哈希一致；这不替代历史服务器文件的内容取证。
+- 边缘标志：原提供命令没有`--disable_edge_guidance`，按源码属性应为True；历史原始日志却打印False，命令与日志有一处未逐字对应。P5模式创建edge_guidance=None，并在进入legacy边缘分支前直接返回，该标志只影响属性/日志，不影响P5模型参数、构建随机数或前向计算；不为其新增训练。复现命令的-u只改变日志缓冲。
+- 当前结论：已无已知有效训练参数差异可以直接解释0.003960的峰值差。原环境与当前解释器分别为`/home/zsy/miniconda3/envs/mslau-net/bin/python`及`/home/le/miniconda3/envs/mslau-naf/bin/python`，实际依赖构建、cuDNN等尚未对照，不能据路径不同就断言环境是原因。下一步只读比较两套解释器的当前元数据；若原解释器不可访问，再由原实验者导出。当前导出不等于还原8月11日历史环境。
+- 产物：`analysis/p51_original_08786_vs_repro_08746_20261016/reported_original_launch.txt`、`launch_comparison.json`。本轮未修改模型或启动训练；此前3次重复计划不增加新配置，未收到结果不宣称完成。
+
+### 2026-10-16：两套环境对照完成，规划原始代码上的环境重复对照
+
+- 证据：用户同步 `p51_env_compare_zX39oiez.log`；原解释器与当前解释器均可访问并成功导入torch。日志反映当前环境状态，不是2026-08-11运行快照。尚未收到此前3次重复训练结果及冻结主干指纹结果。
+- 实际差异：原/当前Python为3.10.20(GCC14.3.0)/3.10.22(GCC14.4.0)；torch包标签2.1.2/2.1.2+cu118；torchvision0.16.2/0.16.2+cu118；PyTorch构建输出中的MKL为2022.1 Build20220311/2022.2 Build20220804。原环境同样CUDA可用构建，不能把无+cu118后缀理解为CPU版；仅靠标签也不足以确定全部二进制差异。
+- 一致项：CUDA build11.8、cuDNN8700(8.7.0)、本次检查进程matmul TF32=False/cuDNN TF32=True；timm1.0.15、numpy1.26.4、albumentations1.4.24、albucore0.0.23、safetensors0.8.0、torchmetrics1.6.1、OpenCV-headless4.10.0.84、Pillow12.3.0、scikit-image0.25.2、scipy1.15.3；torch编译器GCC9.3、MKL-DNN3.1.1及其Git hash一致。USE_NCCL文本为ON/1，本训练为单卡且无分布式通信，不将该文本差异归为精度原因。
+- 结论边界：环境存在差异，但没有证据将0.003960峰值差归因于Python补丁、MKL或发行包构建，也未发现CUDA/cuDNN/TF32默认值及列出增强库版本差异。此前输入探针已证实同seed样本相同而增强不同，训练波动仍是合理候选解释；不把两条曲线当作环境因果对照，不为接近0.8786而先改LR/epoch或重装依赖。
+- 下一步（尚未执行）：同一原始clone(81b19e2)、同一空闲3090串行、官方Hiera初始化、seed1234及完整20轮原参数，仅切换两套绝对Python路径；若此前重复尚未开始，原/当前/原/当前各2次交替作为探索；若当前环境3次已启动/完成则全部保留，只补2次原环境，不重复开启当前组。所有新checkpoint统一用mslau-naf解释器和原分支kvasir_test.py评估，训练环境/参数/日志分别保存。小样本只提供探索信号，不能分离Python与MKL贡献或宣称显著性；不擅自停止已经启动的任务。
+- 产物：`analysis/p51_original_08786_vs_repro_08746_20261016/environment_comparison.csv`、`environment_comparison.json`，含原日志SHA256、解析后的包/构建数据和对照协议；启动命令已做bash语法检查。本轮未改模型、未在本地或服务器启动训练。
+
+### 2026-10-19：原/当前环境各2次对照完成，存在探索信号但不足以归因
+
+- 具体操作与完整性：读取用户同步`p51_env_ab_zTFKdPrU`全部4次记录；原/当前/原/当前顺序串行、时间戳无重叠。代码81b19e2，保存的Hiera及split哈希与先前一致。训练命令除解释器和输出位置外完全一致，全部20轮、4组模型配置头和40值/次的学习率序列一致。两次原环境pip freeze逐字相同，两次当前环境亦相同。4次均用`/home/le/miniconda3/envs/mslau-naf/bin/python`与原分支`kvasir_test.py`评估，同120张验证集、参数除checkpoint路径外相同；独立评估与训练最佳值在4位小数精度下一致。
+- 同步边界：第4次`console.log`未同步，但其`logs/kvasir_train.log`覆盖0—19轮、有训练完成及最佳checkpoint汇总，独立评估亦完成，因此纳入分析，无需重训。尚未收到冻结主干指纹结果。
+- 单次结果：1_original **0.875919@14**，独立IoU0.8759/Dice0.9264/Precision0.9218/Recall0.9472，最后5轮IoU0.86976、20m57s；2_current **0.873020@18**，0.8730/0.9274/0.9269/0.9392，最后5轮0.86806、21m04s；3_original **0.871033@13**，0.8710/0.9261/0.9339/0.9314，最后5轮0.86702、21m01s；4_current **0.869290@13**，0.8693/0.9232/0.9207/0.9413，最后5轮0.86426、21m15s。
+- 汇总：原环境 **0.873476±0.003455**，当前 **0.871155±0.002638**（各n=2、全部seed1234、样本标准差；不是跨seed结果）。均值差 **+0.002321**（+0.2321个百分点）。原环境范围0.871033—0.875919，当前0.869290—0.873020，范围重叠；原环境自身两次相差0.004886（0.4886个百分点），大于历史0.878616与先前0.874656的0.003960差距量级。相邻区组差+0.002899/+0.001743仅作描述，增强输入并未严格配对，不作配对显著性推断。最后5轮均值分别0.86839/0.86616。最好0.875919仍低于历史峰值0.002697（0.2697个百分点）。
+- 新运行条件证据：本轮4次GPU前置快照驱动均为 **580.178.04**，而2026-10-14的0.874656复现快照为 **535.154.05**；8月历史0.878616的驱动未知。不能把先前复现混入本轮同条件环境组统计，或把驱动变化当精度原因。SMI显示CUDA13.0是驱动支持信息，各运行torch实际CUDA build仍为11.8、cuDNN8.7。四次GPU前置快照无计算进程，运行时均记录RTX3090。两环境本轮耗时均约21分钟，先前28分钟差异未重现。
+- 环境边界：完整pip freeze还显示ImageIO2.37.4/2.38.0、Pydantic2.13.4/2.14.1、stringzilla4.6.2/5.2.0等差异；此前仅对列出的核心包确认同版，并未声称全部依赖相同。本实验检验环境整体，不分解Python/MKL或单库贡献；URL安装记录与==版本记录不同不自动表示版本不同。
+- 结论：原环境两次探索性均值较高，但n=2且组内波动较大，支持继续小规模确认，不能认定环境是历史差距主因或断言环境无影响。训练重复波动已被直接观察到，不保证更换原环境就恢复0.878616。不回退驱动、改超参数或扩展NAF。
+- 下一步（尚未执行）：反向顺序先current再original各补1次，同原代码、参数、同空闲3090和580.178.04驱动，达到每环境3次同seed重复；输出新`p51_env_ab_extra_...`目录，统一当前解释器评估，检查驱动/pip freeze延续上一轮。若驱动或依赖改变，保存输出再判断，不静默混组；不为未同步的第4次console补训。
+- 产物：`analysis/p51_env_ab_zTFKdPrU_20261019/run_summary.csv`、`epoch_metrics.csv`、`environment_freeze_differences.csv`、`analysis_summary.json`，包含原文件SHA256、命令/日志审计、分组统计及驱动变化证据。本轮只分析/记录，无模型代码改动，无训练启动。
+
+### 2026-10-19：环境补跑完成及后续输出布局
+
+- 证据：`p51_env_ab_extra_E10YU4dN`，current→original各补1次。与前4次同代码81b19e2、Hiera/split哈希相同，两环境各自pip freeze逐字延续前轮；6次有效训练参数、模型配置头、学习率序列一致，全部20轮。统一当前解释器/原分支评估，评估IoU与训练最佳四位小数一致。
+- 新结果：current **0.865311@19**（Dice0.9183，22m02s）；original **0.866661@16**（Dice0.9198，22m11s）。各3次均seed1234：original **0.871204±0.004631**，current **0.869207±0.003855**，样本标准差；均值差+0.001997（0.1997个百分点）。原环境范围0.866661—0.875919，当前0.865311—0.873020。这不是三seed结果。
+- 运行条件边界：两次驱动仍580.178.04、RTX3090、CUDA build11.8、cuDNN8700，runtime均CUDA_VISIBLE_DEVICES=0。current补跑前整机无计算进程；original补跑前GPU1—3有rife/ffmpeg进程，选用GPU0显存0MiB但利用率47%，不能称整机空闲或证明训练全程无竞争。original记录GPU0 UUID，current的selected_gpu.txt未同步。不能将其他卡任务直接归因于精度下降。
+- 结论：原环境保持小幅探索性优势，但范围明显重叠，组内波动大于均值差；两环境第三次均下降，未定位唯一原因。尚未复现历史0.878616，也没有证明环境等效或库版本为差距主因。不继续无上限重复以追峰值，不自动启动训练或更换驱动/依赖。
+- 输出约定：用户指定后续权重/checkpoint、实验记录、可视化分别归`/data/models/le/mslau-net/checkpoints`、`experiments`、`visualization`，使用共同run_id分目录，详见第3节。本轮只记录约定，未改训练保存代码、删除/搬迁文件或创建远程目录。
+- 产物：`analysis/p51_env_ab_six_runs_20261019/`中的run_summary.csv、epoch_metrics.csv、environment_freeze_differences.csv、analysis_summary.json；保留原始日志SHA256与验证项。
+
+### 2026-10-19：输出入口统一、保留清单与NAF优先级更新
+
+- 用户授权：统一后续输出，盘点旧文件但先不删除；第一目标改为NAF稳定超过同环境匹配baseline，历史最优精确复现为第二目标。停止将追到0.878616作为模块工作前提，不继续无限重跑/重装环境。
+- 代码：新增tools/run_experiment.py（训练/评估包装、唯一run_id、三根目录、元数据/源码快照、GPU启动检查、日志与失败状态、带锁index.jsonl）；新增tools/inventory_outputs.py（只读扫描，CSV/JSON报告，跳过代码/数据/环境目录及软链接，不删除/迁移）；kvasir_train.py仅增加日志目录parsed_args.json，记录完整解析参数，无RNG/模型/损失/训练参数变更。保留原始checkpoint保存语义，尚未去重或添加续训状态。
+- 清单：本地analysis/output_retention_20261019/retention_plan.csv覆盖19目录/文件组；local_inventory_v2逐文件209项，约1.41MB逻辑大小。唯一观察到的pth为0字节占位，不代表有效权重；服务器完整权重容量待只读盘点。不因本地未同步而判定远端缺失或估计可释放容量。历史0.878616、原0.874656源权重、关键匹配对照与诊断引用权重保护；重复命名副本、冒烟和旧PID仅列人工审阅候选。
+- 研究协议：固定mslau-naf环境；新选择器先无正则S，再加分段正则SR，对照none基线B；如有信号补均匀正则SU辨别分段贡献。stage/位置和其他超参固定，不新增融合。先明确设计并做工程检查，再筛查seed1234、锁定候选后重跑42/1234/2026匹配对照，额外独立确认后才讨论稳定性。旧驱动/旧代码结果不替代新B。不保证方法必然有效。
+- 验证：新增tests/test_experiment_outputs.py共7项通过，覆盖无副作用dry-run、禁止输出路径覆盖、评估路径与父run链接、GPU忙时不启动、子进程成功/失败记录、只读扫描；本地使用现有test-py311和/tmp/s2i_vitl_1015_deps中的pytest，无新安装。py_compile与git diff --check均通过。未启动训练、新NAF尚未实现。
+- 交付说明：docs/experiment_outputs.md包含新布局、可执行dry-run、服务器只读盘点命令和保留规则。清单不等于清理授权；本轮未删除/搬迁文件，未推送或在服务器执行新入口。
+
 ## 9. 后续每次追加记录的模板
 
 ```markdown
@@ -543,6 +691,8 @@ GitHub 远程仓库：`chuifengbushuang/MSLAU_OPT`。zsy 已配置 GitHub SSH �
 ```
 
 ## 10. 下一步优先级
+
+2026-10-19 当前任务优先：NAF稳定优于匹配baseline为第一目标，历史0.878616精确复现为辅助目标。环境对照6次结束，原/当前均值0.871204/0.869207，范围重叠，不继续追峰值或重装环境。用户新输出根目录已创建，统一入口与只读盘点工具本地完成；先同步代码并盘点服务器旧输出，再锁定新NAF频率选择/分段正则设计，做工程验证后才训练。保留旧naf2d/none兼容，不再扩展旧失败配置，不新增融合；候选必须对照同环境/同协议B并做多seed确认。详细最小消融与交付协议见docs/experiment_outputs.md。下列P5.2/CVC等为历史储备优先级，均排在当前NAF主线之后，不自动启动。
 
 1. **P5.2小目标主线**：以冻结的P5.1为基线，先分别做“aux D2/D3权重1.0/0.5/0.25”和“H/2零初始化RGB细节残差分支”两个seed1234单变量实验；有效后才组合并补三seed。
 2. **预注册判断标准**：最小面积四分位至少从0.800657提高到0.810；总体三seed均值不低于0.872802，Precision不低于0.919、Recall不低于0.935，最大面积组下降不超过0.005。
