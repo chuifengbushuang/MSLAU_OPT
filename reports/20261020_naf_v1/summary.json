@@ -1,0 +1,235 @@
+{
+  "input_root": "/home/lien/WorkSpace/PolypSegmentation/experiments",
+  "run_count": 12,
+  "evidence_sha256": {
+    "exp00_baseline_seed1234_20261020_093552_791160/manifest.json": "71cc62818b570e59e1673cfb5e256a31a49d289f38dd1774bdf84412d1097b04",
+    "exp00_baseline_seed1234_20261020_093552_791160/console.log": "1bd5da349b26330f3fc36b73ece876611e9f4b9e139f2568ef0c8d5a48daae7e",
+    "exp00_baseline_seed1234_20261020_093552_791160/evaluation.log": "74004e1dfd831110912ad48366f1e0c24fabb6436320902c5d7d0ad46f2275db",
+    "exp00_baseline_seed1234_20261020_093552_791160/environment.txt": "0bd086d53b3fa80619e898bb3f8158e50869f6e3358f65e0183845a9e0c54254",
+    "exp00_baseline_seed1234_20261020_093552_791160/runtime.txt": "527e91cce3d9090acbf9103bc2c829ba7347cafe6b876ffe05eca26c05e84c00",
+    "exp00_baseline_seed2026_20261020_102054_878300/manifest.json": "ca97a9c1927586308f94d7f80bdf5e67529e9b2fee985f2722130d59107f6010",
+    "exp00_baseline_seed2026_20261020_102054_878300/console.log": "b4cd48b6aea015ca23836738ba741b93b3bb251342960db958ccfce40bb8792f",
+    "exp00_baseline_seed2026_20261020_102054_878300/evaluation.log": "135713a5c7a6b38510033f3a7c97b26d8941242b23c05af74d0a38583206a3cf",
+    "exp00_baseline_seed2026_20261020_102054_878300/environment.txt": "0bd086d53b3fa80619e898bb3f8158e50869f6e3358f65e0183845a9e0c54254",
+    "exp00_baseline_seed2026_20261020_102054_878300/runtime.txt": "527e91cce3d9090acbf9103bc2c829ba7347cafe6b876ffe05eca26c05e84c00",
+    "exp00_baseline_seed42_20261020_095752_831937/manifest.json": "b89a6b528cda3caa5888fbc21df7480377c39275821aeec89718bee551061f9e",
+    "exp00_baseline_seed42_20261020_095752_831937/console.log": "ba98dcc1bb6425806f33ec4a1d2a98ff9b073ddd70c1556b50197019d65ff621",
+    "exp00_baseline_seed42_20261020_095752_831937/evaluation.log": "c89d52ccd2f9496669b432fe529a6fd81be057d69073c7ee651b359b7f8d9ebd",
+    "exp00_baseline_seed42_20261020_095752_831937/environment.txt": "0bd086d53b3fa80619e898bb3f8158e50869f6e3358f65e0183845a9e0c54254",
+    "exp00_baseline_seed42_20261020_095752_831937/runtime.txt": "527e91cce3d9090acbf9103bc2c829ba7347cafe6b876ffe05eca26c05e84c00",
+    "exp01_naf_all_seed1234_20261020_104914_930183/manifest.json": "45cda7e95120193e294aadc43d38f1f4e035ae088e8200dc13e3ce84d66bc514",
+    "exp01_naf_all_seed1234_20261020_104914_930183/console.log": "5818aaa8f0444cd9b6d49f3bdb264d83ffca886719e3ef3b2a20cc5fe99e7f21",
+    "exp01_naf_all_seed1234_20261020_104914_930183/evaluation.log": "f9c330b83a5ee6dbc4479ee7f4ab5f29282462742d78fa42e577f1bd4ab17889",
+    "exp01_naf_all_seed1234_20261020_104914_930183/environment.txt": "0bd086d53b3fa80619e898bb3f8158e50869f6e3358f65e0183845a9e0c54254",
+    "exp01_naf_all_seed1234_20261020_104914_930183/runtime.txt": "527e91cce3d9090acbf9103bc2c829ba7347cafe6b876ffe05eca26c05e84c00",
+    "exp01_naf_all_seed2026_20261020_120524_1045095/manifest.json": "e43f177c6f67e3dc3996776fb12301f5e60b09031b696ba4a6499551b3edcdb8",
+    "exp01_naf_all_seed2026_20261020_120524_1045095/console.log": "540c6485a6e42a8fd32ce0804387624b8d6ba741b6801677ab80e38bb2d632f0",
+    "exp01_naf_all_seed2026_20261020_120524_1045095/evaluation.log": "d57e5b88332d2420b022eed050b363e375396a17b3029f54d8b619ef77d3bbc7",
+    "exp01_naf_all_seed2026_20261020_120524_1045095/environment.txt": "0bd086d53b3fa80619e898bb3f8158e50869f6e3358f65e0183845a9e0c54254",
+    "exp01_naf_all_seed2026_20261020_120524_1045095/runtime.txt": "527e91cce3d9090acbf9103bc2c829ba7347cafe6b876ffe05eca26c05e84c00",
+    "exp01_naf_all_seed42_20261020_113128_992660/manifest.json": "f4f38a5042b55472176efad99c5889e6f08f8a22971ecc770c1874e65d5d865c",
+    "exp01_naf_all_seed42_20261020_113128_992660/console.log": "fb8a70c62acdbb2fc10a4205a13109eee3f8f249a3f747727b6e8cec0d6ac0cf",
+    "exp01_naf_all_seed42_20261020_113128_992660/evaluation.log": "c05fc3d72ef41dd11d009b53b809ab8f7a04eb7dfc9e866ef52f5865cf1a7528",
+    "exp01_naf_all_seed42_20261020_113128_992660/environment.txt": "0bd086d53b3fa80619e898bb3f8158e50869f6e3358f65e0183845a9e0c54254",
+    "exp01_naf_all_seed42_20261020_113128_992660/runtime.txt": "527e91cce3d9090acbf9103bc2c829ba7347cafe6b876ffe05eca26c05e84c00",
+    "exp02_naf_p34_seed1234_20261020_123427_1092898/manifest.json": "d234b30f141139063decdb6db0a57db98cccd679065b64242c8b08914a3da369",
+    "exp02_naf_p34_seed1234_20261020_123427_1092898/console.log": "b742428203d893cf01a0f2b2dc1439fd39fcb4f847e78caf8c2853b896a981f1",
+    "exp02_naf_p34_seed1234_20261020_123427_1092898/evaluation.log": "8669154f5f1318f9787c52c2492739170fbb6060b773b9f6a710d289813de37e",
+    "exp02_naf_p34_seed1234_20261020_123427_1092898/environment.txt": "0bd086d53b3fa80619e898bb3f8158e50869f6e3358f65e0183845a9e0c54254",
+    "exp02_naf_p34_seed1234_20261020_123427_1092898/runtime.txt": "527e91cce3d9090acbf9103bc2c829ba7347cafe6b876ffe05eca26c05e84c00",
+    "exp02_naf_p34_seed2026_20261020_133123_1186852/manifest.json": "d150184c39a83c3cfc594feef2583b60677fb5180890970117f3fafeccbf9ed1",
+    "exp02_naf_p34_seed2026_20261020_133123_1186852/console.log": "be20c50d901aa14855ca5e9bd10da9b5355c4a87da7c479f04244cbe44400d28",
+    "exp02_naf_p34_seed2026_20261020_133123_1186852/evaluation.log": "3161ed23ea00c187fa0cc03c808ffd223c98a954d7b5a556978af06f7e5e7e10",
+    "exp02_naf_p34_seed2026_20261020_133123_1186852/environment.txt": "0bd086d53b3fa80619e898bb3f8158e50869f6e3358f65e0183845a9e0c54254",
+    "exp02_naf_p34_seed2026_20261020_133123_1186852/runtime.txt": "527e91cce3d9090acbf9103bc2c829ba7347cafe6b876ffe05eca26c05e84c00",
+    "exp02_naf_p34_seed42_20261020_130538_1141789/manifest.json": "e8da7da2f9a4802098e3fe6304e6416ceb5860f078b95eb386606296d7c6ff4d",
+    "exp02_naf_p34_seed42_20261020_130538_1141789/console.log": "b37ebf00357d7cfd76f486073492a9c7788ce026e325448457f0dec8ac798399",
+    "exp02_naf_p34_seed42_20261020_130538_1141789/evaluation.log": "d9e9e1b4bffa1d4c5cfe593adc3261e5ee8bbf7a7e94cddf402483fed9af61a5",
+    "exp02_naf_p34_seed42_20261020_130538_1141789/environment.txt": "0bd086d53b3fa80619e898bb3f8158e50869f6e3358f65e0183845a9e0c54254",
+    "exp02_naf_p34_seed42_20261020_130538_1141789/runtime.txt": "527e91cce3d9090acbf9103bc2c829ba7347cafe6b876ffe05eca26c05e84c00",
+    "exp03_naf_p12_seed1234_20261020_135652_1231880/manifest.json": "4d16f3ca88716e49d49bb5b627f5977acd88e3be8938bbde40422bcd449885b5",
+    "exp03_naf_p12_seed1234_20261020_135652_1231880/console.log": "68a8ab5e6f6ccba66f328be553f9502d2dccc378fac78840f72eb147c08f65e0",
+    "exp03_naf_p12_seed1234_20261020_135652_1231880/evaluation.log": "6929018f4cf47e8966767a8cef498a0f705a19be881733e293245c2ca3381c43",
+    "exp03_naf_p12_seed1234_20261020_135652_1231880/environment.txt": "0bd086d53b3fa80619e898bb3f8158e50869f6e3358f65e0183845a9e0c54254",
+    "exp03_naf_p12_seed1234_20261020_135652_1231880/runtime.txt": "527e91cce3d9090acbf9103bc2c829ba7347cafe6b876ffe05eca26c05e84c00",
+    "exp03_naf_p12_seed2026_20261020_144800_1322985/manifest.json": "d176505c072857b16bda893e8a6ecfc20f482aa7c4fd344050d344fd5e9e14d8",
+    "exp03_naf_p12_seed2026_20261020_144800_1322985/console.log": "be30308a87db6c7c30f7ead06db50cc2759b96c06d2862e1be177408dab27c44",
+    "exp03_naf_p12_seed2026_20261020_144800_1322985/evaluation.log": "fc2bb57b933618707cf002e98e7ba20ad7a37787fcae76b4baeb65f45ba2e104",
+    "exp03_naf_p12_seed2026_20261020_144800_1322985/environment.txt": "0bd086d53b3fa80619e898bb3f8158e50869f6e3358f65e0183845a9e0c54254",
+    "exp03_naf_p12_seed2026_20261020_144800_1322985/runtime.txt": "527e91cce3d9090acbf9103bc2c829ba7347cafe6b876ffe05eca26c05e84c00",
+    "exp03_naf_p12_seed42_20261020_142221_1276864/manifest.json": "c3634b4a03b7ed3a13708bee0bf4420efc31601bdfaa7c7dc72001182e2cec1e",
+    "exp03_naf_p12_seed42_20261020_142221_1276864/console.log": "f664a9e9ce344e0d32e01df31ccdb47004eaf6b49cc4db938873b927f3c0cbcd",
+    "exp03_naf_p12_seed42_20261020_142221_1276864/evaluation.log": "163fc7c1d394bd2a18bbb4b4e1184d575217af5d61ca20f4b27a679a6eb7aca8",
+    "exp03_naf_p12_seed42_20261020_142221_1276864/environment.txt": "0bd086d53b3fa80619e898bb3f8158e50869f6e3358f65e0183845a9e0c54254",
+    "exp03_naf_p12_seed42_20261020_142221_1276864/runtime.txt": "527e91cce3d9090acbf9103bc2c829ba7347cafe6b876ffe05eca26c05e84c00"
+  },
+  "experiments": {
+    "exp00_baseline": {
+      "iou": {
+        "mean": 0.8641546666666666,
+        "sample_std": 0.003508600908244407,
+        "minimum": 0.861825,
+        "maximum": 0.86819
+      },
+      "dice": {
+        "mean": 0.9185,
+        "sample_std": 0.0029546573405387993,
+        "minimum": 0.9161,
+        "maximum": 0.9218
+      },
+      "precision": {
+        "mean": 0.9200666666666667,
+        "sample_std": 0.013461550183145071,
+        "minimum": 0.9118,
+        "maximum": 0.9356
+      },
+      "recall": {
+        "mean": 0.9335333333333333,
+        "sample_std": 0.012606479815290757,
+        "minimum": 0.9195,
+        "maximum": 0.9439
+      },
+      "delta_vs_baseline": {
+        "mean": 0.0,
+        "sample_std": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0
+      },
+      "wins": 0,
+      "train_seconds": {
+        "mean": 1432.6666666666667,
+        "sample_std": 202.5742662169441,
+        "minimum": 1287,
+        "maximum": 1664
+      },
+      "metric_source": "best validation IoU: 6 decimals; independent evaluation metrics: 4 decimals"
+    },
+    "exp01_naf_all": {
+      "iou": {
+        "mean": 0.8664026666666667,
+        "sample_std": 0.0025634200462143135,
+        "minimum": 0.864276,
+        "maximum": 0.869249
+      },
+      "dice": {
+        "mean": 0.9198000000000001,
+        "sample_std": 0.0015874507866387474,
+        "minimum": 0.918,
+        "maximum": 0.921
+      },
+      "precision": {
+        "mean": 0.9174666666666667,
+        "sample_std": 0.0010115993936995846,
+        "minimum": 0.9163,
+        "maximum": 0.9181
+      },
+      "recall": {
+        "mean": 0.9424666666666667,
+        "sample_std": 0.00258907963055086,
+        "minimum": 0.9405,
+        "maximum": 0.9454
+      },
+      "delta_vs_baseline": {
+        "mean": 0.0022480000000000278,
+        "sample_std": 0.0014462126399668886,
+        "minimum": 0.0010590000000000321,
+        "maximum": 0.003858000000000028
+      },
+      "wins": 3,
+      "train_seconds": {
+        "mean": 2067,
+        "sample_std": 402.33319524990725,
+        "minimum": 1703,
+        "maximum": 2499
+      },
+      "metric_source": "best validation IoU: 6 decimals; independent evaluation metrics: 4 decimals"
+    },
+    "exp02_naf_p34": {
+      "iou": {
+        "mean": 0.8714373333333333,
+        "sample_std": 0.00590104942644384,
+        "minimum": 0.865799,
+        "maximum": 0.87757
+      },
+      "dice": {
+        "mean": 0.9252,
+        "sample_std": 0.003966106403010414,
+        "minimum": 0.9208,
+        "maximum": 0.9285
+      },
+      "precision": {
+        "mean": 0.9203,
+        "sample_std": 0.011608617488745133,
+        "minimum": 0.9069,
+        "maximum": 0.9273
+      },
+      "recall": {
+        "mean": 0.942,
+        "sample_std": 0.008407734534343961,
+        "minimum": 0.9368,
+        "maximum": 0.9517
+      },
+      "delta_vs_baseline": {
+        "mean": 0.0072826666666666595,
+        "sample_std": 0.00912847853332272,
+        "minimum": -0.002391000000000032,
+        "maximum": 0.01574500000000001
+      },
+      "wins": 2,
+      "train_seconds": {
+        "mean": 1615.6666666666667,
+        "sample_std": 193.53897109712383,
+        "minimum": 1497,
+        "maximum": 1839
+      },
+      "metric_source": "best validation IoU: 6 decimals; independent evaluation metrics: 4 decimals"
+    },
+    "exp03_naf_p12": {
+      "iou": {
+        "mean": 0.8734643333333333,
+        "sample_std": 0.006179591113765823,
+        "minimum": 0.867567,
+        "maximum": 0.879892
+      },
+      "dice": {
+        "mean": 0.9258333333333333,
+        "sample_std": 0.006316908526592234,
+        "minimum": 0.9198,
+        "maximum": 0.9324
+      },
+      "precision": {
+        "mean": 0.9235666666666666,
+        "sample_std": 0.005514828495368952,
+        "minimum": 0.9183,
+        "maximum": 0.9293
+      },
+      "recall": {
+        "mean": 0.9431666666666667,
+        "sample_std": 0.0008082903768655153,
+        "minimum": 0.9427,
+        "maximum": 0.9441
+      },
+      "delta_vs_baseline": {
+        "mean": 0.00930966666666666,
+        "sample_std": 0.00916642183915478,
+        "minimum": -0.0006230000000000402,
+        "maximum": 0.017442999999999986
+      },
+      "wins": 2,
+      "train_seconds": {
+        "mean": 1523,
+        "sample_std": 39.1279950930277,
+        "minimum": 1497,
+        "maximum": 1568
+      },
+      "metric_source": "best validation IoU: 6 decimals; independent evaluation metrics: 4 decimals"
+    }
+  },
+  "caveats": [
+    "Three seeds per setting; exploratory comparison, no significance claim.",
+    "Same seed does not fix Albumentations trajectories in the frozen code.",
+    "Validation selects checkpoints; no independent held-out test set used.",
+    "Timing is observational under shared server load, not a controlled benchmark.",
+    "Weights not supplied: no weight contents, per-image masks or predictions inspected."
+  ]
+}

@@ -215,6 +215,25 @@ class NAFTests(unittest.TestCase):
                 partial.stages[target].selector[-1].weight)
             torch.testing.assert_close(full_gradient, partial_gradient, rtol=1e-5, atol=1e-7)
 
+    def test_no_reg_controls_only_change_lambda_and_id(self):
+        builder = load('ablation_builder', ROOT / 'tools/build_experiment.py')
+        for experiment, parent in [('exp04_naf_all_no_reg', 'exp01_naf_all'),
+                                   ('exp05_naf_p12_no_reg', 'exp03_naf_p12')]:
+            with self.subTest(experiment=experiment):
+                config = json.loads((ROOT / 'experiments' / experiment / 'config.json').read_text())
+                reference = json.loads((ROOT / 'experiments' / parent / 'config.json').read_text())
+                expected = copy.deepcopy(reference)
+                expected['id'] = experiment
+                expected['train_options']['naf_reg_weight'] = 0.0
+                self.assertEqual(config, expected)
+                target = Path(self.temporary.name) / experiment
+                manifest = builder.build(experiment, target)
+                self.assertEqual(manifest['patch_sha256'], self.manifests[parent]['patch_sha256'])
+                self.assertEqual(manifest['added_files'], self.manifests[parent]['added_files'])
+                for name, digest in manifest['files'].items():
+                    if name.endswith('.py'):
+                        self.assertEqual(digest, self.manifests[parent]['files'][name])
+
     def test_stage_one_regularizer_is_frequency_neutral(self):
         _, _, bands, weights = self.naf.frequency_geometry(88, 88, 'cpu', torch.float32)
         coefficients = 1.0 ** (-(bands + 1).float())
@@ -279,23 +298,29 @@ class NAFTests(unittest.TestCase):
                 output, penalty, stats = self.progressive_decoder.frequency_enhancer([x] * 4)
                 return dict(logits=output[0], naf_regularization=penalty, naf_stats=stats)
 
-        model = TinyModel()
         features = torch.randn(2, 1, 11, 11)
         labels = torch.zeros_like(features)
-        optimizer = torch.optim.AdamW(model.parameters(), lr=0)
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, 1)
         batches = [(features, labels, ['a', 'b'])]
-        with tempfile.TemporaryDirectory() as tmp, patch.object(logging, 'info') as log, \
-             patch.object(torch.cuda, 'is_available', return_value=False):
-            namespace['train_model'](model, nn.BCEWithLogitsLoss(), optimizer, scheduler,
-                                     dict(train=batches, valid=batches),
-                                     lambda x, y: x.new_tensor(0.5), 1, tmp, boundary_weight=0)
-            self.assertEqual(len(list(Path(tmp).glob('*.pth'))), 3)
-            lines = [call.args[0] for call in log.call_args_list if call.args]
-            train = next(line for line in lines if line.startswith('train Loss:'))
-            valid = next(line for line in lines if line.startswith('valid Loss:'))
-            self.assertGreater(float(train.split()[2]), float(valid.split()[2]))
-            self.assertEqual(train.split()[4], valid.split()[4])
+        for weight in (1.0, 0.0):
+            model = TinyModel()
+            model.naf_reg_weight = weight
+            optimizer = torch.optim.AdamW(model.parameters(), lr=0)
+            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, 1)
+            with self.subTest(weight=weight), tempfile.TemporaryDirectory() as tmp, \
+                 patch.object(logging, 'info') as log, \
+                 patch.object(torch.cuda, 'is_available', return_value=False):
+                namespace['train_model'](model, nn.BCEWithLogitsLoss(), optimizer, scheduler,
+                                         dict(train=batches, valid=batches),
+                                         lambda x, y: x.new_tensor(0.5), 1, tmp, boundary_weight=0)
+                self.assertEqual(len(list(Path(tmp).glob('*.pth'))), 3)
+                lines = [call.args[0] for call in log.call_args_list if call.args]
+                train = next(line for line in lines if line.startswith('train Loss:'))
+                valid = next(line for line in lines if line.startswith('valid Loss:'))
+                if weight:
+                    self.assertGreater(float(train.split()[2]), float(valid.split()[2]))
+                else:
+                    self.assertEqual(float(train.split()[2]), float(valid.split()[2]))
+                self.assertEqual(train.split()[4], valid.split()[4])
 
     @unittest.skipUnless(os.environ.get('NAF_FULL_SMOKE') == '1', 'optional real Hiera smoke not requested')
     def test_full_hiera_model(self):

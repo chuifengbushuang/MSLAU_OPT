@@ -9,7 +9,9 @@ experiments/
   exp01_naf_all/        四层完整模型配置
   exp02_naf_p34/        仅P3/P4配置
   exp03_naf_p12/        仅P1/P2配置
-  shared_naf_v1/        三个NAF实验共用的changes.patch、added/和方法说明
+  exp04_naf_all_no_reg/ 四层NAF去正则对照
+  exp05_naf_p12_no_reg/ P1/P2 NAF去正则对照
+  shared_naf_v1/        NAF实验共用的changes.patch、added/和方法说明
 tools/
   build_experiment.py   基线＋单个实验差异 → 完整源码
   run_experiment.py     临时展开后运行，默认只预览
@@ -52,7 +54,7 @@ GPU占用查询失败也仅提示，是否能使用指定卡由PyTorch的CUDA检
 CUDA_VISIBLE_DEVICES=0 NAF_FULL_SMOKE=1 NAF_DEVICE=cuda /home/le/miniconda3/envs/mslau-p51/bin/python -m unittest discover -s tests -p 'test_exp01_naf.py' -v
 ```
 
-全部实验三个种子依次执行，任一次失败即停止；GPU按实际选择修改：
+首轮实验0–3的三个种子依次执行（本批已完成），任一次失败即停止；GPU按实际选择修改：
 
 ```bash
 (
@@ -70,6 +72,25 @@ CUDA_VISIBLE_DEVICES=0 NAF_FULL_SMOKE=1 NAF_DEVICE=cuda /home/le/miniconda3/envs
 
 共12次正式训练/独立评估；若实验0三seed已完成，可从列表移除exp00_baseline，复用现有结果。旧NAF结果不能替代新协议的实验2。
 
+
+## 当前进度与下一批
+
+2026-10-20首轮12次已完成，报告见reports/20261020_naf_v1/README.md。当前匹配IoU均值：baseline0.864155、四层0.866403、P3/P4 0.871437、P1/P2 0.873464。
+四层3/3seed改善；P1/P2均值最高但2/3改善，尚未确认稳定增益。下一批仅增加两个去正则对照，不重复首轮。
+exp04_naf_all_no_reg对照实验1，exp05_naf_p12_no_reg对照实验3，只将lambda改为0。共享模型源码/补丁完全相同，无需重复完整模型GPU检查。
+
+```bash
+(
+    set -e
+    export P51_OUTPUT_ROOT=/data/models/le/mslau-net
+    export NO_ALBUMENTATIONS_UPDATE=1
+    for P51_EXPERIMENT in exp04_naf_all_no_reg exp05_naf_p12_no_reg; do
+        for P51_SEED in 1234 42 2026; do
+            /home/le/miniconda3/envs/mslau-p51/bin/python -u tools/run_experiment.py "$P51_EXPERIMENT" --seed "$P51_SEED" --gpu 0 --run
+        done
+    done
+)
+```
 
 ## 输出与完整导出
 
