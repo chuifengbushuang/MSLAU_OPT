@@ -11,6 +11,7 @@ experiments/
   exp03_naf_p12/        仅P1/P2配置
   exp04_naf_all_no_reg/ 四层NAF去正则对照
   exp05_naf_p12_no_reg/ P1/P2 NAF去正则对照
+  exp07_naf_cascade/    三级双输入NAF级联，独立补丁和模型文件
   shared_naf_v1/        NAF实验共用的changes.patch、added/和方法说明
 tools/
   build_experiment.py   基线＋单个实验差异 → 完整源码
@@ -28,7 +29,8 @@ tools/
 每个实验直接相对冻结基线，不在运行时引用其他实验；必须改变基线时另建批次。
 仅接入位置不同的实验用source_definition=shared_naf_v1复用同一份冻结差异源码。构建时复制实际代码，导出后独立，不引用别的实验目录。
 运行前提交；工作树有未提交改动时统一入口拒绝训练。当前实验0为原始基线，实验1四层，实验2仅P3/P4，实验3仅P1/P2。方法和归约见experiments/shared_naf_v1/README.md。
-所有NAF实验固定R=sum(启用层R_n)/4，lambda=0.001。旧exp01_naf_select_reg是分母2的历史版本，不混入新协议。
+实验1–3固定R=sum(启用层R_n)/4，lambda=0.001；实验4/5仅将lambda改为0。
+实验7为三级双输入级联，六个分支固定求和除以6，lambda=0.001。旧exp01_naf_select_reg是分母2的历史版本，不混入新协议。
 
 ## 环境和运行
 
@@ -73,11 +75,12 @@ CUDA_VISIBLE_DEVICES=0 NAF_FULL_SMOKE=1 NAF_DEVICE=cuda /home/le/miniconda3/envs
 共12次正式训练/独立评估；若实验0三seed已完成，可从列表移除exp00_baseline，复用现有结果。旧NAF结果不能替代新协议的实验2。
 
 
-## 当前进度与下一批
+## 实验0–5已完成
 
 2026-10-20首轮12次已完成，报告见reports/20261020_naf_v1/README.md。当前匹配IoU均值：baseline0.864155、四层0.866403、P3/P4 0.871437、P1/P2 0.873464。
-四层3/3seed改善；P1/P2均值最高但2/3改善，尚未确认稳定增益。下一批仅增加两个去正则对照，不重复首轮。
+四层3/3seed改善；P1/P2均值最高但2/3改善，尚未确认稳定增益。实验4/5也已完成，不需要重复执行下方历史批量命令。
 exp04_naf_all_no_reg对照实验1，exp05_naf_p12_no_reg对照实验3，只将lambda改为0。共享模型源码/补丁完全相同，无需重复完整模型GPU检查。
+实验4均值0.867181，实验5均值0.863899：四层去正则小幅提高0.0778百分点，P1/P2去正则三个seed均下降、均值下降0.9565百分点。新旧批分别使用GPU0/2、增强轨迹未固定，不能据此宣布确定因果或稳定增益。
 
 ```bash
 (
@@ -88,6 +91,32 @@ exp04_naf_all_no_reg对照实验1，exp05_naf_p12_no_reg对照实验3，只将la
         for P51_SEED in 1234 42 2026; do
             /home/le/miniconda3/envs/mslau-p51/bin/python -u tools/run_experiment.py "$P51_EXPERIMENT" --seed "$P51_SEED" --gpu 0 --run
         done
+    done
+)
+```
+
+## 当前候选：实验7完整模型
+
+三个独立双输入NAF，先分别滤波再门控融合；无独立NAF4，保留原Decoder和训练配置。
+F3=NAF3(P3,P4)，F2=NAF2(P2,F3)，F1=NAF1(P1,F2)。F3/F2/F1同时进入原Decoder，P4原样进入最深解码路径。
+双路选择器使用联合频谱描述；融合使用GAP+centered RMS；输出投影零初始化，初始输出与基线一致。新增56,124参数。
+具体流程、论文借鉴边界及正则归约见experiments/exp07_naf_cascade/README.md；旧实验保持冻结，后续融合/去正则对照暂不新增。
+
+服务器拉取后，先完成实验7合成检查，包含官方Hiera和正式batch12的一次前向/反向，不执行正式训练：
+
+```bash
+CUDA_VISIBLE_DEVICES=0 NO_ALBUMENTATIONS_UPDATE=1 EXP07_FULL_SMOKE=1 EXP07_DEVICE=cuda EXP07_SMOKE_BATCH=12 /home/le/miniconda3/envs/mslau-p51/bin/python -m unittest discover -s tests -p 'test_exp07_naf.py' -v
+```
+
+合成检查通过后，三个种子顺序运行，任一次失败即停止：
+
+```bash
+(
+    set -e
+    export P51_OUTPUT_ROOT=/data/models/le/mslau-net
+    export NO_ALBUMENTATIONS_UPDATE=1
+    for P51_SEED in 1234 42 2026; do
+        /home/le/miniconda3/envs/mslau-p51/bin/python -u tools/run_experiment.py exp07_naf_cascade --seed "$P51_SEED" --gpu 0 --run
     done
 )
 ```
@@ -141,7 +170,8 @@ manifest保存研究提交、基线、补丁/新增文件/源码哈希、配置�
 原环境最好观察值0.875919，原作者历史最好0.878616；旧NAF源码保留在Git历史/归档tag中。
 
 历史整理和命名修复工具只手动使用，不参与训练流程。
-基础检查：python -m unittest discover -s tests -v，不导入模型、不用GPU、不训练。
+基础检查：python -m unittest discover -s tests -v，包含CPU数值和展开模型的合成检查，不执行正式训练。
+完整Hiera检查只在显式设置NAF_FULL_SMOKE或EXP07_FULL_SMOKE时启用；需要有torch的环境才能执行模型数值检查。
 
 已执行旧版单权重迁移的结果，使用tools/restore_checkpoint_names.py预览，加--apply才修复命名。
 它恢复固定名称和带指标的IoU名称（新建IoU副本使用硬链接，不额外复制大文件）；
