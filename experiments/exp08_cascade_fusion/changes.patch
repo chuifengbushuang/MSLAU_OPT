@@ -1,0 +1,113 @@
+--- a/networks/mslau_net.py
++++ b/networks/mslau_net.py
+@@ -7,6 +7,7 @@
+ from timm.layers import trunc_normal_, DropPath, to_2tuple
+ import copy
+
++from networks.cascade_fusion import CascadeFusion2D
+ from networks.msla import MSLA
+ from networks.edge_guidance import EdgeGuidedAttention
+
+@@ -870,6 +871,7 @@
+         self.side1 = nn.Conv2d(channels, num_classes, 1)
+         self.side2 = nn.Conv2d(channels, num_classes, 1)
+         self.head = nn.Conv2d(channels, num_classes, 1)
++        self.frequency_enhancer = CascadeFusion2D(channels)
+
+     @staticmethod
+     def resize_logits(logits, output_size):
+@@ -878,9 +880,9 @@
+             mode="bilinear", align_corners=False)
+
+     def forward(self, encoder_features, output_size, return_aux=False):
+-        e1, e2, e3, e4 = [
+-            rfb(feature) for rfb, feature in zip(self.rfbs, encoder_features)
+-        ]
++        features = [rfb(feature) for rfb, feature in zip(self.rfbs, encoder_features)]
++        features, fusion_stats = self.frequency_enhancer(features)
++        e1, e2, e3, e4 = features
+         d3 = self.up1(e4, e3)
+         d2 = self.up2(d3, e2)
+         d1 = self.up3(d2, e1)
+@@ -891,6 +893,7 @@
+             "logits": logits,
+             "aux_d2": self.resize_logits(self.side2(d2), output_size),
+             "aux_d3": self.resize_logits(self.side1(d3), output_size),
++            "fusion_stats": fusion_stats,
+         }
+
+
+--- a/kvasir_train.py
++++ b/kvasir_train.py
+@@ -28,6 +28,7 @@
+     StructureLoss_binary,
+ )
+ from networks.mslau_net import MSLAU_net
++from networks.cascade_fusion import FUSION_STATS_NAMES
+
+ if platform.system() != "Windows":
+     pathlib.WindowsPath = pathlib.PosixPath
+@@ -261,6 +262,7 @@
+             running_iou = 0.0
+             running_distill_loss = 0.0
+             running_samples = 0
++            running_fusion_stats = None
+
+             for inputs, labels, _ in dataloaders[phase]:
+                 if torch.cuda.is_available():
+@@ -315,6 +317,10 @@
+                         outputs = model_outputs
+                         main_loss = criterion(outputs, labels)
+                         loss = main_loss
++                    # Experiment 8 has no frequency regularizer or extra loss.
++                    fusion_stats = model_outputs["fusion_stats"].detach() * inputs.size(0)
++                    running_fusion_stats = (fusion_stats if running_fusion_stats is None
++                                            else running_fusion_stats + fusion_stats)
+                     distill_loss = outputs.new_zeros(())
+                     if distiller is not None and phase == "train":
+                         distill_loss = distiller(
+@@ -342,6 +348,10 @@
+                 "{} Loss: {:.4f} MainLoss: {:.4f} DistillLoss: {:.4f} IoU: {:.4f}".format(
+                     phase, epoch_loss, epoch_main_loss,
+                     epoch_distill_loss, epoch_acc))
++
++            for level, stats in enumerate((running_fusion_stats / running_samples).cpu().tolist(), start=1):
++                logging.info("%s Fusion%d: %s", phase, level,
++                             ", ".join("%s=%.6f" % pair for pair in zip(FUSION_STATS_NAMES, stats)))
+
+             loss_list[phase].append(epoch_main_loss)
+             accuracy_list[phase].append(epoch_acc)
+@@ -497,7 +507,11 @@
+         choices=["fixed", "lff_scale"],
+         help="feature fusion mode in Conv_MLA",
+     )
++    parser.add_argument("--naf_reg_weight", type=float, choices=[0.0], default=0.0,
++                        help="experiment 8 has no frequency regularizer; must be zero")
+     args = parser.parse_args()
++    if args.decoder_mode != "p5_sam2unet":
++        parser.error("Experiment 8 requires --decoder_mode p5_sam2unet")
+     seed = args.seed
+     torch.manual_seed(seed)
+     np.random.seed(seed)
+@@ -611,6 +625,10 @@
+             model.encoder.freeze_backbone,
+             args.aux_d2_weight, args.aux_d3_weight,
+         )
++    logging.info("Experiment 8 fusion only: F3=Fusion3(P3,P4); F2=Fusion2(P2,F3); "
++                 "F1=Fusion1(P1,F2); no level4 module; frequency_processing=bypassed; "
++                 "regularizer=off lambda=0; GAP+centered_RMS fusion; align_corners=True; "
++                 "zero output projection; shared layer initialization matches experiment 7")
+     if args.encoder_name == "mslau":
+         load_encoder_pretrained(model, args.pretrained)
+     elif args.pretrained:
+--- a/kvasir_test.py
++++ b/kvasir_test.py
+@@ -149,6 +149,8 @@
+     parser.add_argument("--disable_p3_reverse_attention", action="store_true",
+                         help="disable the P3 reverse-attention multiplication gate")
+     args = parser.parse_args()
++    if args.decoder_mode != "p5_sam2unet":
++        parser.error("Experiment 8 requires --decoder_mode p5_sam2unet")
+
+     dataset_path = resolve_path(args.dataset)
+     split_txt = resolve_path(args.split_txt)

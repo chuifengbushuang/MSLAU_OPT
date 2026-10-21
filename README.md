@@ -12,6 +12,7 @@ experiments/
   exp04_naf_all_no_reg/ 四层NAF去正则对照
   exp05_naf_p12_no_reg/ P1/P2 NAF去正则对照
   exp07_naf_cascade/    三级双输入NAF级联，独立补丁和模型文件
+  exp08_cascade_fusion/ 实验7的仅级联融合对照，独立源码，频率及正则关闭
   shared_naf_v1/        NAF实验共用的changes.patch、added/和方法说明
 tools/
   build_experiment.py   基线＋单个实验差异 → 完整源码
@@ -31,6 +32,7 @@ tools/
 运行前提交；工作树有未提交改动时统一入口拒绝训练。当前实验0为原始基线，实验1四层，实验2仅P3/P4，实验3仅P1/P2。方法和归约见experiments/shared_naf_v1/README.md。
 实验1–3固定R=sum(启用层R_n)/4，lambda=0.001；实验4/5仅将lambda改为0。
 实验7为三级双输入级联，六个分支固定求和除以6，lambda=0.001。旧exp01_naf_select_reg是分母2的历史版本，不混入新协议。
+实验8保留实验7的投影、GAP+RMS门控、残差和级联，频率处理旁路且无正则；共享层初始参数逐元素一致。
 
 ## 环境和运行
 
@@ -95,12 +97,13 @@ exp04_naf_all_no_reg对照实验1，exp05_naf_p12_no_reg对照实验3，只将la
 )
 ```
 
-## 当前候选：实验7完整模型
+## 实验7完整模型（已完成）
 
 三个独立双输入NAF，先分别滤波再门控融合；无独立NAF4，保留原Decoder和训练配置。
 F3=NAF3(P3,P4)，F2=NAF2(P2,F3)，F1=NAF1(P1,F2)。F3/F2/F1同时进入原Decoder，P4原样进入最深解码路径。
 双路选择器使用联合频谱描述；融合使用GAP+centered RMS；输出投影零初始化，初始输出与基线一致。新增56,124参数。
-具体流程、论文借鉴边界及正则归约见experiments/exp07_naf_cascade/README.md；旧实验保持冻结，后续融合/去正则对照暂不新增。
+具体流程、论文借鉴边界及正则归约见experiments/exp07_naf_cascade/README.md；旧实验保持冻结。仅融合对照现为实验8，实验7单独去正则对照暂不新增。
+三seed IoU为0.871073/0.876448/0.871200，均值0.872907±0.003067；较当前基线+0.8752百分点、3/3提高，较实验3低0.0557百分点、1/3提高。三seed探索结果不证明稳定增益或边缘改善；已有实验7无需重复训练。
 
 服务器拉取后，先完成实验7合成检查，包含官方Hiera和正式batch12的一次前向/反向，不执行正式训练：
 
@@ -117,6 +120,30 @@ CUDA_VISIBLE_DEVICES=0 NO_ALBUMENTATIONS_UPDATE=1 EXP07_FULL_SMOKE=1 EXP07_DEVIC
     export NO_ALBUMENTATIONS_UPDATE=1
     for P51_SEED in 1234 42 2026; do
         /home/le/miniconda3/envs/mslau-p51/bin/python -u tools/run_experiment.py exp07_naf_cascade --seed "$P51_SEED" --gpu 0 --run
+    done
+)
+```
+
+## 下一步：实验8仅级联融合
+
+独立定义exp08_cascade_fusion。投影与融合共享层初始参数及全局CPU随机状态与实验7一致，新增可训练参数55,728；删除396个频率选择器/alpha参数，运行时没有FFT/IFFT或频率正则。
+配置相对实验7仅改变id和naf_reg_weight=0；实际损失直接沿用原训练损失，不添加零值占位正则。方法及检查见experiments/exp08_cascade_fusion/README.md。
+
+先执行服务器合成检查，包含官方Hiera、正式batch12的前向/反向及峰值显存，不执行正式训练：
+
+```bash
+CUDA_VISIBLE_DEVICES=0 NO_ALBUMENTATIONS_UPDATE=1 EXP08_FULL_SMOKE=1 EXP08_DEVICE=cuda EXP08_SMOKE_BATCH=12 /home/le/miniconda3/envs/mslau-p51/bin/python -m unittest discover -s tests -p 'test_exp08_fusion.py' -v
+```
+
+通过后，三个种子依次训练/评估，失败即停止：
+
+```bash
+(
+    set -e
+    export P51_OUTPUT_ROOT=/data/models/le/mslau-net
+    export NO_ALBUMENTATIONS_UPDATE=1
+    for P51_SEED in 1234 42 2026; do
+        /home/le/miniconda3/envs/mslau-p51/bin/python -u tools/run_experiment.py exp08_cascade_fusion --seed "$P51_SEED" --gpu 0 --run
     done
 )
 ```
@@ -171,7 +198,7 @@ manifest保存研究提交、基线、补丁/新增文件/源码哈希、配置�
 
 历史整理和命名修复工具只手动使用，不参与训练流程。
 基础检查：python -m unittest discover -s tests -v，包含CPU数值和展开模型的合成检查，不执行正式训练。
-完整Hiera检查只在显式设置NAF_FULL_SMOKE或EXP07_FULL_SMOKE时启用；需要有torch的环境才能执行模型数值检查。
+完整Hiera检查只在显式设置NAF_FULL_SMOKE、EXP07_FULL_SMOKE或EXP08_FULL_SMOKE时启用；需要有torch的环境才能执行模型数值检查。
 
 已执行旧版单权重迁移的结果，使用tools/restore_checkpoint_names.py预览，加--apply才修复命名。
 它恢复固定名称和带指标的IoU名称（新建IoU副本使用硬链接，不额外复制大文件）；
