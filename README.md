@@ -3,9 +3,14 @@
 研究分支exp/p51-independent，直接基于原实验者最新提交81b19e2。
 目标：原始三seed baseline → 单个NAF候选 → 匹配比较和迭代，不追历史峰值。
 
+当前候选为实验9 `exp09_naf_discrete`：保留实验7三级级联，训练按样本抽取90%共轭频率对、评估确定性Top-K，去掉内部alpha，对评分V施加分段平方L2正则，固定六项均值归约。
+实验9接入已有paired_aug_v1输入协议，对照应使用`exp00_baseline_paired_aug_v1`；旧实验0–8保持原样，旧NAF结果只作参考。
+实现边界、合成检查和正式三seed命令见[实验9说明](experiments/exp09_naf_discrete/README.md)。本地检查不替代3090完整Hiera检查，不代表已有训练收益。
+
 ```text
 experiments/
   exp00_baseline/       原始14文件＋run.py/config.json/说明
+  exp00_baseline_paired_aug_v1/ 原增强不变，独立控制输入随机性和记录
   exp01_naf_all/        四层完整模型配置
   exp02_naf_p34/        仅P3/P4配置
   exp03_naf_p12/        仅P1/P2配置
@@ -13,6 +18,7 @@ experiments/
   exp05_naf_p12_no_reg/ P1/P2 NAF去正则对照
   exp07_naf_cascade/    三级双输入NAF级联，独立补丁和模型文件
   exp08_cascade_fusion/ 实验7的仅级联融合对照，独立源码，频率及正则关闭
+  exp09_naf_discrete/   三级级联＋离散频率选择＋评分V正则，输入采用paired_aug_v1
   shared_naf_v1/        NAF实验共用的changes.patch、added/和方法说明
 tools/
   build_experiment.py   基线＋单个实验差异 → 完整源码

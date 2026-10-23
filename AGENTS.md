@@ -1,6 +1,6 @@
 # P5.1 + NAF 项目约定
 
-更新2026-10-22；用户最新要求优先。详细旧记录保存在Git历史，不再累积无关路线。
+更新2026-10-23；用户最新要求优先。详细旧记录保存在Git历史，不再累积无关路线。
 
 ## 目标与源码
 
@@ -20,6 +20,9 @@
 - 实验7固定六项正则求和除以6，lambda=0.001；local层级标签n=i、context标签n=i+1（混合上下文的先验约定，不是物理尺度）。验证不加正则。仅融合对照已授权并定义为实验8，实验7单独去正则对照暂不实现。
 - 实验8 exp08_cascade_fusion直接相对冻结基线构建，自己的补丁和added/networks/cascade_fusion.py；保留实验7三级双输入投影、GAP+RMS门控、输出残差和级联，无第4级模块，不改变原Decoder。前向无FFT、选择器、alpha或正则，配置naf_reg_weight只允许0。保留frequency_enhancer容器名以核对共享层，不导入实验7。
 - 实验8初始化在CPU RNG隔离区按实验7顺序消耗临时选择器的随机初始化，随后丢弃，确保三个seed全部共享层初值逐元素一致且全局RNG不变；没有闲置频率参数或每batch初始化开销。新增55,728参数，比实验7少396。训练、评估、数据、官方初始化和三输出根目录/三权重命名不变。
+- 实验9 exp09_naf_discrete：直接相对冻结基线的独立补丁/新增文件，保留实验7三级级联/投影/GAP+RMS/外部Pi残差和原Decoder；无独立NAF4、无内部alpha。每路V=sigmoid(selector)、P=softmax(V)，训练sample-keyed Gumbel-Top-K无放回抽ceil(0.9G)个共轭对，评估stable Top-K，所有自共轭位置固定保留。前向0/1，反向tau=0.1的定预算sigmoid隐式梯度近似，有偏且不是原论文已确认实现。新增56,118参数，共享初值/RNG与实验7一致。
+- 实验9正则约束V平方，radial thirds和n_local=i/n_context=i+1；每支对batch/可选择共轭对取均值，六支求和/6、lambda=0.001，仅训练加入。当前22/44/88网格保留完整频谱约90.083%/90.083%/90.005%，不是90%能量。分段系数并不保证正确选择息肉边缘。
+- 实验9使用paired_aug_v1输入算法，新增helper只额外记录baseline_state_sha256（剔除新模块的初值哈希），旧实验及paired基线不改。频率抽样键为协议/seed/epoch/样本ID/层级/分支，不含repeat或实验名且不消费全局RNG。与exp00_baseline_paired_aug_v1比较，尚未实现同协议仅融合/均匀抽样/去正则新对照。此轮仅检查、提交推送、提供命令，禁止代启动正式训练。
 
 ## 环境和协议
 
@@ -31,7 +34,7 @@
 - 数据/data/dataset/zsy/mslau-net/Kvasir-SEG，原split880/120，路径不变。
 - 官方初始化/data/models/zsy/mslau-net/pretrained/sam2_hiera_large.fb_r1024.safetensors，SHA256=7694579e76566289f25f63799024a2fe83144005c75ece6c09458254aa3ee13c。
 - 原训练：352/b12/nw8/e20、Structure、两组LR均1e-3、D2/D3均1、boundary0，其余原默认；旧实验不增加增强seed控制等训练改动。用户2026-10-22明确授权新增独立的基线输入可重复性协议，见下条。
-- 新exp00_baseline_paired_aug_v1仅对冻结基线增加输入控制及记录，不改原14文件/旧实验。SHA256按seed/epoch/phase/样本ID派生Compose种子；独立epoch采样器和worker RNG，persistent_workers=False；原增强函数/网络/损失不改。直接调用原作者当前/home/zsy/miniconda3/envs/mslau-net/bin/python，不更新环境。先CPU真实数据一致性检查，再seed1234独立20epoch两次，P51_REPEAT只作标签；本代理不代为启动正式训练。输入/初值可验证一致，不承诺CUDA训练逐位确定或重现0.8786；后续NAF尚未接入。
+- 新exp00_baseline_paired_aug_v1仅对冻结基线增加输入控制及记录，不改原14文件/旧实验。SHA256按seed/epoch/phase/样本ID派生Compose种子；独立epoch采样器和worker RNG，persistent_workers=False；原增强函数/网络/损失不改。直接调用原作者当前/home/zsy/miniconda3/envs/mslau-net/bin/python，不更新环境。先CPU真实数据一致性检查，再seed1234独立20epoch两次，P51_REPEAT只作标签；本代理不代为启动正式训练。输入/初值可验证一致，不承诺CUDA训练逐位确定或重现0.8786；实验9现已接入同一输入算法。
 - 实验0的1234/42/2026各一次，不从重复运行中挑最高值；后续只比较匹配协议。
 - 权重、记录、图像分别在/data/models/le/mslau-net/checkpoints、experiments、visualization下使用同run_id；有图才生成图像目录。
 
@@ -80,3 +83,4 @@
 - 实验7三seed完整记录已分析：均值0.872907±0.003067；较本批基线+0.8752百分点、3/3提高，较实验3低0.0557百分点、1/3提高。环境/官方权重/split/训练配置一致，实验0/3为GPU2、实验7为GPU0且启动有其他进程；不认定速度因果、长期稳定或边缘改善。未修改模型/旧输出，完整数据分析在工作空间analysis/20261021_exp07_comparison。
 - 实验8本地检查：PyTorch2.13 CPU，61项中58通过、3项官方权重完整Hiera检查未执行。新增10项中9通过、1项服务器检查待用户运行；覆盖三seed共享层/RNG、非零融合下恒等滤波参考的前向及梯度等价、禁止FFT仍可运行、真实级联及跨层梯度、原Decoder输出、64通道autocast、优化器/严格重载、实际训练无正则与三权重保存。10个展开Python文件语法、14份基线原提交字节一致及所有旧实验未改检查通过。未启动正式训练，默认GPU0；服务器合成检查使用EXP08_FULL_SMOKE=1、batch12。
 - 基线paired_aug_v1本地检查：完整72项中69通过、3项既有官方Hiera/GPU检查跳过；新增11项全部通过。CPU PyTorch2.13，真实Albumentations1.4.24/NumPy1.26.4/skimage0.25.2（测试依赖仅置于本地/tmp，不修改原环境）。覆盖8-worker/0-worker两轮输入一致、独立进程/全局RNG扰动、按样本/epoch/seed变化、原初值RNG保留、实际小型训练循环的输入/高精度指标记录和三权重、启动器两阶段记录与重复标签。14份基线与原提交逐字节一致、旧实验未改、展开语法/预览通过。未访问服务器原数据或官方权重，未启动正式训练；下一步用户先执行tools/check_paired_inputs.py，再独立两次seed1234。
+- 实验9本地检查：完整83项中79通过、4项官方Hiera/GPU检查跳过；新增11项中10通过、1项需服务器官方Hiera。CPU PyTorch2.13、临时真实Albumentations1.4.24/NumPy1.26.4依赖；完整回归在允许本地进程间socket的权限下运行（沙箱最初阻断既有多进程测试）。覆盖奇偶/矩形共轭与精确预算、真实置零/DC/能量、连续近似有限差分/硬前向/任务梯度、样本键与批顺序/全局RNG无关、六项V正则和跨层梯度、三seed共享初值/原Decoder输出、严格重载/autocast、相同输入协议与实际训练循环/初值/指标/三权重。14份原文件及旧实验不变、展开语法/命令预览通过。默认GPU0；服务器EXP09_FULL_SMOKE=1、batch12检查两次随机合成前向反向（中间一次合成优化更新），不使用原数据或保存正式权重。未启动正式训练。
