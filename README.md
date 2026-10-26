@@ -8,6 +8,7 @@
 实现边界、合成检查和正式三seed命令见[实验9说明](experiments/exp09_naf_discrete/README.md)。本地检查不替代3090完整Hiera检查，不代表已有训练收益。
 
 当前暂停扩展模型实验，先检查配对输入基线的CUDA数值可重复性。服务器已确认两个上采样用例在普通模式下梯度有微小差异，在严格模式下5次逐位相同；尚不能据此解释完整训练的IoU波动。
+完整基线短步对照现已完成：同一GPU3的普通模式首次前向一致、首次反向出现差异，严格模式三个更新全部一致。下一步使用独立的`exp00_baseline_paired_strict_v1`验证两次seed1234完整训练；原配方与旧实验不变，方法、状态记录及命令见[严格基线说明](experiments/exp00_baseline_paired_strict_v1/README.md)。代理不代启动训练。
 完整基线短步重放使用独立工具，不修改任何实验定义：
 
 ```bash
@@ -22,6 +23,7 @@
 experiments/
   exp00_baseline/       原始14文件＋run.py/config.json/说明
   exp00_baseline_paired_aug_v1/ 原增强不变，独立控制输入随机性和记录
+  exp00_baseline_paired_strict_v1/ 同一输入算法＋严格CUDA执行，完整重复验证
   exp01_naf_all/        四层完整模型配置
   exp02_naf_p34/        仅P3/P4配置
   exp03_naf_p12/        仅P1/P2配置
