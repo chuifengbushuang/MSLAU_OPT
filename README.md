@@ -7,6 +7,17 @@
 实验9接入已有paired_aug_v1输入协议，对照应使用`exp00_baseline_paired_aug_v1`；旧实验0–8保持原样，旧NAF结果只作参考。
 实现边界、合成检查和正式三seed命令见[实验9说明](experiments/exp09_naf_discrete/README.md)。本地检查不替代3090完整Hiera检查，不代表已有训练收益。
 
+当前暂停扩展模型实验，先检查配对输入基线的CUDA数值可重复性。服务器已确认两个上采样用例在普通模式下梯度有微小差异，在严格模式下5次逐位相同；尚不能据此解释完整训练的IoU波动。
+完整基线短步重放使用独立工具，不修改任何实验定义：
+
+```bash
+/home/le/miniconda3/envs/mslau-p51/bin/python -u tools/check_baseline_numerics.py --gpu 0 --seed 1234 --mode strict --steps 3
+```
+
+工具在两个全新进程中各执行epoch 0前三个真实batch的诊断更新，保留352/b12/nw8、原AdamW/Structure/辅助监督/学习率；只启用严格确定性及CuBLAS配置，保留TF32与注意力后端现状。直接使用原增强/损失定义，避开训练脚本中无关的torchmetrics/Matplotlib导入。它不会运行完整epoch、验证或保存权重，临时展开源码结束即删除。
+小型JSON和日志保存在`/data/models/le/mslau-net/experiments/p51_numeric_replay_strict_seed1234_…/`，含初始完整参数与CPU/CUDA随机状态、逐batch输入、前向输出/损失、每个参数的梯度和更新后参数/BN缓冲区哈希，以及首次差异路径。`summary.json`的`matched`只代表观察到的三个更新一致，不承诺整次训练一致。失败记录保留具体异常，不能把严格模式报错改成警告后视为通过。
+需要排查普通模式时可显式设置`--mode default`；当前只要求先运行严格模式，不启动新一批正式训练。
+
 ```text
 experiments/
   exp00_baseline/       原始14文件＋run.py/config.json/说明
