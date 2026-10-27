@@ -80,8 +80,13 @@ class P12StrictTests(unittest.TestCase):
             build('exp03_naf_p12', original)
             self.assertEqual((self.source / 'networks/mslau_net.py').read_bytes(),
                              (original / 'networks/mslau_net.py').read_bytes())
-        self.assertEqual((self.source / 'networks/naf_select_reg.py').read_bytes(),
-            (ROOT / 'experiments/shared_naf_v1/added/networks/naf_select_reg.py').read_bytes())
+        # Only the scan implementation changes for strict torch2.1 CUDA support.
+        old = ast.parse((ROOT / 'experiments/shared_naf_v1/added/networks/naf_select_reg.py').read_text())
+        new = ast.parse((self.source / 'networks/naf_select_reg.py').read_text())
+        for tree in (old, new):
+            tree.body = [n for n in tree.body if not isinstance(n, ast.FunctionDef)
+                         or n.name not in ('soft_budget_mask', 'fixed_order_cumsum_last')]
+        self.assertEqual(ast.dump(old), ast.dump(new))
         for name in ('paired_inputs.py', 'strict_runtime.py'):
             self.assertEqual((self.source / name).read_bytes(),
                 (ROOT / 'experiments/exp09_naf_discrete_paired_strict_v2/added' / name).read_bytes())
@@ -104,6 +109,90 @@ class P12StrictTests(unittest.TestCase):
         for command in (train, evaluate):
             self.assertEqual(command[command.index('--naf_stages') + 1], '1,2')
         verify_base()
+
+    def test_fixed_scan_forward_backward_and_gradcheck(self):
+        for length in (0, 1, 3, 8, 17, 1012, 3960):
+            for dtype in (torch.float32, torch.float64):
+                a = torch.randn(2, length, dtype=dtype, requires_grad=True)
+                b = a.detach().clone().requires_grad_()
+                actual = self.naf.fixed_order_cumsum_last(a)
+                expected = b.cumsum(-1)
+                torch.testing.assert_close(actual, expected, atol=1e-4 if dtype == torch.float32 else 1e-12,
+                                           rtol=2e-5 if dtype == torch.float32 else 1e-12)
+                gradient = torch.randn_like(a)
+                actual.backward(gradient)
+                expected.backward(gradient)
+                torch.testing.assert_close(a.grad, b.grad, atol=1e-4 if dtype == torch.float32 else 1e-12,
+                                           rtol=2e-5 if dtype == torch.float32 else 1e-12)
+        value = torch.randn(2, 7, dtype=torch.float64, requires_grad=True)
+        self.assertTrue(torch.autograd.gradcheck(self.naf.fixed_order_cumsum_last, (value,)))
+
+    def test_fixed_budget_mask_matches_original_forward_gradient_and_budget(self):
+        original = load('p12_original_scan', ROOT / 'experiments/shared_naf_v1/added/networks/naf_select_reg.py')
+        for h,w in ((11,11), (22,22), (44,44), (88,88), (13,18)):
+            for uniform in (False, True):
+                weights = self.naf.frequency_geometry(h, w, 'cpu', torch.float64)[-1]
+                a = (torch.full((2,1,h,w//2+1), .5, dtype=torch.float64) if uniform else
+                     torch.rand(2,1,h,w//2+1, dtype=torch.float64)).requires_grad_()
+                b = a.detach().clone().requires_grad_()
+                actual = self.naf.soft_budget_mask(a, weights)
+                expected = original.soft_budget_mask(b, weights)
+                torch.testing.assert_close(actual, expected, atol=1e-11, rtol=1e-10)
+                gradient = torch.randn_like(a)
+                actual.backward(gradient)
+                expected.backward(gradient)
+                torch.testing.assert_close(a.grad, b.grad, atol=1e-9, rtol=1e-8)
+                torch.testing.assert_close((actual*weights).sum((1,2,3))/weights.sum(),
+                                           torch.full((2,), .9, dtype=torch.float64))
+                self.assertTrue((actual[...,0,0] == 1).all())
+        value = torch.rand(1,1,3,4, dtype=torch.float64, requires_grad=True)
+        weights = torch.ones_like(value)
+        self.assertTrue(torch.autograd.gradcheck(lambda x:self.naf.soft_budget_mask(x, weights), (value,)))
+
+    def test_strict_module_forward_backward_without_native_cumsum(self):
+        with patch.dict(os.environ, {'CUBLAS_WORKSPACE_CONFIG': ':4096:8'}):
+            self.runtime['configure_runtime']()
+            module = self.naf.PyramidNAF2D((1,2))
+            features = [torch.randn(2,4,h,h, requires_grad=True) for h in (88,44,22,11)]
+            with patch.object(torch.Tensor, 'cumsum', side_effect=AssertionError('native scan must not run')), \
+                 patch('torch.cumsum', side_effect=AssertionError('native scan must not run')):
+                outputs, penalty, _ = module(features)
+                (sum(x.square().mean() for x in outputs) + .001*penalty).backward()
+            self.assertTrue(torch.are_deterministic_algorithms_enabled())
+            self.assertTrue(all(x.grad is not None and torch.isfinite(x.grad).all() for x in features))
+            self.assertTrue(all(p.grad is not None and torch.isfinite(p.grad).all() for p in module.parameters()))
+
+    @unittest.skipUnless(os.environ.get('P12_STRICT_FULL_SMOKE') == '1', 'server CUDA scan check not requested')
+    def test_cuda_scan_and_p12_repeat_with_native_cumsum_forbidden(self):
+        with patch.dict(os.environ, {'CUBLAS_WORKSPACE_CONFIG': ':4096:8'}):
+            self.runtime['configure_runtime']()
+        for dtype in (torch.float32, torch.float64):
+            cpu = torch.randn(12, 3960, dtype=dtype, requires_grad=True)
+            gradient = torch.randn_like(cpu)
+            expected = cpu.cumsum(-1)
+            expected.backward(gradient)
+            gpu = cpu.detach().cuda().requires_grad_()
+            with patch.object(torch.Tensor, 'cumsum', side_effect=AssertionError('native scan must not run')), \
+                 patch('torch.cumsum', side_effect=AssertionError('native scan must not run')):
+                actual = self.naf.fixed_order_cumsum_last(gpu)
+                actual.backward(gradient.cuda())
+            torch.testing.assert_close(actual.cpu(), expected, atol=1e-4 if dtype==torch.float32 else 1e-12,
+                                       rtol=2e-5 if dtype==torch.float32 else 1e-12)
+            torch.testing.assert_close(gpu.grad.cpu(), cpu.grad, atol=1e-4 if dtype==torch.float32 else 1e-12,
+                                       rtol=2e-5 if dtype==torch.float32 else 1e-12)
+        traces=[]
+        for repeat in range(2):
+            torch.manual_seed(1234)
+            module = self.naf.PyramidNAF2D((1,2)).cuda()
+            features = [torch.randn(2,64,h,h,device='cuda',requires_grad=True) for h in (88,44,22,11)]
+            with patch.object(torch.Tensor, 'cumsum', side_effect=AssertionError('native scan must not run')), \
+                 patch('torch.cumsum', side_effect=AssertionError('native scan must not run')):
+                output, penalty, _ = module(features)
+                (sum(x.square().mean() for x in output)+.001*penalty).backward()
+            traces.append(self.helpers['state_digest']({**{f'output.{i}':x for i,x in enumerate(output)},
+                **{f'gradient.{n}':p.grad for n,p in module.named_parameters()},
+                **{f'input_gradient.{i}':x.grad for i,x in enumerate(features)}}))
+        self.assertEqual(traces[0], traces[1])
 
     def test_three_seeds_preserve_shared_initialization_rng_and_baseline_hash(self):
         for seed in (1234, 42, 2026):

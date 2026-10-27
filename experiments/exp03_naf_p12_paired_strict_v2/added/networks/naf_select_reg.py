@@ -16,6 +16,23 @@ STATS_NAMES = ('keep_low', 'keep_mid', 'keep_high', 'alpha', 'regularizer',
                'selection_std', 'keep_all')
 
 
+def fixed_order_cumsum_last(values):
+    """Inclusive last-axis scan using a fixed tree of additions.
+
+    PyTorch2.1 CUDA float cumsum is unavailable in strict deterministic mode.
+    Slice/add/cat keeps the scan and its autograd path on the input device,
+    without that kernel, CPU copies or a temporary relaxation of strict mode.
+    The formula is unchanged; the floating-point addition order can differ.
+    """
+    result = values
+    offset = 1
+    while offset < values.shape[-1]:
+        result = torch.cat((result[..., :offset],
+                            result[..., offset:] + result[..., :-offset]), dim=-1)
+        offset *= 2
+    return result
+
+
 def soft_budget_mask(values, multiplicity, keep=0.9, temperature=0.1):
     """Capped probability allocation: g=min(1,c*p), sum(w*g)=keep*sum(w).
 
@@ -33,8 +50,8 @@ def soft_budget_mask(values, multiplicity, keep=0.9, temperature=0.1):
     ordered, order = density.sort(dim=-1, descending=True)
     ordered_weights = weights.gather(-1, order)
     prefix = torch.cat([weights.new_zeros((weights.shape[0], 1)),
-                        ordered_weights.cumsum(-1)[:, :-1]], dim=-1)
-    suffix = (ordered * ordered_weights).flip(-1).cumsum(-1).flip(-1)
+                        fixed_order_cumsum_last(ordered_weights)[:, :-1]], dim=-1)
+    suffix = fixed_order_cumsum_last((ordered * ordered_weights).flip(-1)).flip(-1)
     budget = keep * weights.sum(-1, keepdim=True)
     # A suffix containing only excluded DC has zero mass; keep that candidate
     # finite and ineligible rather than producing infinities in unused branches.
