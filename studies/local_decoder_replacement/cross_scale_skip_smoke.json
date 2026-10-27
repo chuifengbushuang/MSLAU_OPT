@@ -1,0 +1,81 @@
+{
+  "status": "completed",
+  "variant": "naf_replacement_skip",
+  "batch": 12,
+  "workers": 2,
+  "threads": 4,
+  "precision": "bf16",
+  "strict": true,
+  "steps": [
+    {
+      "step": 0,
+      "seconds": 5.196769520989619,
+      "loss": 4.555171012878418,
+      "main_loss": 1.497293472290039
+    },
+    {
+      "step": 1,
+      "seconds": 0.343081622995669,
+      "loss": 4.0755205154418945,
+      "main_loss": 1.2998188734054565
+    },
+    {
+      "step": 2,
+      "seconds": 0.3166528989968356,
+      "loss": 4.350259304046631,
+      "main_loss": 1.325721263885498
+    },
+    {
+      "step": 3,
+      "seconds": 0.31931265399907716,
+      "loss": 3.961052417755127,
+      "main_loss": 1.2670897245407104
+    },
+    {
+      "step": 4,
+      "seconds": 0.4008095929893898,
+      "loss": 3.717015027999878,
+      "main_loss": 1.257180094718933
+    },
+    {
+      "step": 5,
+      "seconds": 0.3503592689958168,
+      "loss": 3.641195774078369,
+      "main_loss": 1.207698106765747
+    },
+    {
+      "step": 6,
+      "seconds": 0.48923016199842095,
+      "loss": 3.3800225257873535,
+      "main_loss": 1.1531389951705933
+    }
+  ],
+  "steady_step_seconds": 0.334835961497447,
+  "images_per_second": 35.83844443211485,
+  "inference_batch": 6,
+  "inference_batch_seconds": 0.06673180199868511,
+  "estimated_20_epoch_compute_minutes": 8.592553743095777,
+  "peak_allocated_gib": 9.267759799957275,
+  "peak_reserved_gib": 10.123046875,
+  "gradient_checks": {
+    "encoder_adapters": 0.10791015625,
+    "rfbs": 0.1279296875,
+    "head": 0.08251953125,
+    "selector": 0.0008311055134981871,
+    "fusion": 0.0011469436576589942,
+    "output_projection": 0.01644989848136902,
+    "missing": [],
+    "beta_gradients": {
+      "p1": 0.039467453956604004,
+      "p2": -0.07522784173488617,
+      "p3": -0.04733796417713165
+    },
+    "beta_values": {
+      "p1": 0.004215640015900135,
+      "p2": 0.005862764548510313,
+      "p3": 0.005021121818572283
+    }
+  },
+  "repeated_eval_equal": true,
+  "checkpoint_roundtrip_equal": true
+}

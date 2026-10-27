@@ -2,6 +2,13 @@
 
 更新2026-10-27；用户最新要求优先。详细旧记录保存在Git历史，不再累积无关路线。
 
+- 最新授权：在已完成的本机NAF替换版上增加三个跨尺度跳连接，beta均初始0；
+  Di=NAFi(Pi,D{i+1})+beta_i*Up(D{i+1})，D4=P4，新增相加后的Di继续供下一级使用。
+  保留NAF内Pi残差、RFB/三头及原NAF所有参数/正则/采样方式，无UpBlock或新增卷积；只新增3个标量。
+  用户要求先smoke核对beta零初始化与旧替换版一致、beta及任务梯度、推理和重载，再实际训练20轮，
+  seed1234/BF16/b12/nw2/CPU4线程/严格CUDA/paired_aug_v2全部沿用，以旧三组现有结果作对照，不重跑。
+  新变体naf_replacement_skip，新增模块在studies/local_decoder_replacement/naf_cross_scale_skip.py，独立输出local_*目录。
+
 - 2026-10-28最新授权覆盖下文旧“代理不启动训练”：用户要求在当前5070Ti机器实际执行smoke和正式训练，
   seed固定1234，三组为原始无NAF基线、实验9离散级联NAF+原Decoder、同一NAF替换三个UpBlock并保留RFB/三输出头。
   先检查资源、真实小批次速度/显存/梯度/推理，再报告时间；先核对baseline与0.8786相差不超过0.005再推进消融。

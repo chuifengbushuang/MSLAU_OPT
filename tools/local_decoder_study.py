@@ -35,7 +35,8 @@ from build_experiment import ROOT, build
 
 WORKSPACE = ROOT.parent
 NAF_FILE = ROOT / 'experiments/exp09_naf_discrete_paired_strict_v2/added/networks/naf_discrete.py'
-VARIANTS = ('baseline', 'naf_decoder', 'naf_replacement')
+SKIP_FILE = ROOT / 'studies/local_decoder_replacement/naf_cross_scale_skip.py'
+VARIANTS = ('baseline', 'naf_decoder', 'naf_replacement', 'naf_replacement_skip')
 
 
 def definitions(path, names, namespace):
@@ -112,8 +113,11 @@ def make_model(source, args):
     if args.variant != 'baseline':
         naf = load_module('local_study_naf', source / 'networks/naf_discrete.py')
         enhancer = naf.CascadeDiscreteNAF2D(channels=64)
+        if args.variant == 'naf_replacement_skip':
+            skip = load_module('local_study_cross_scale_skip', source / 'networks/naf_cross_scale_skip.py')
+            enhancer = skip.CrossScaleSkipNAF2D(enhancer)
         model.progressive_decoder = StudyDecoder(model.progressive_decoder, enhancer,
-                                                  args.variant == 'naf_replacement')
+                                                  args.variant in ('naf_replacement', 'naf_replacement_skip'))
     return model
 
 
@@ -136,6 +140,11 @@ def gradient_report(model):
                 groups[group].append(gradient.abs().max())
     report = {key: torch.stack(values).max().item() if values else None for key, values in groups.items()}
     report['missing'] = missing
+    enhancer = getattr(model.progressive_decoder, 'frequency_enhancer', None)
+    if hasattr(enhancer, 'betas'):
+        report['beta_gradients'] = {key: value.grad.item() if value.grad is not None else None
+                                    for key, value in enhancer.betas.items()}
+        report['beta_values'] = {key: value.item() for key, value in enhancer.betas.items()}
     return report
 
 
@@ -145,6 +154,10 @@ def check_gradients(report, variant):
         required += ['selector', 'fusion', 'output_projection']
     if report['missing'] or any(report[key] is None or report[key] <= 0 for key in required):
         raise RuntimeError(f'Gradient path failed: {report}')
+    if variant == 'naf_replacement_skip':
+        gradients = report['beta_gradients'].values()
+        if any(value is None or not math.isfinite(value) or value == 0 for value in gradients):
+            raise RuntimeError(f'Beta gradient path failed: {report}')
 
 
 def make_optimizer(model):
@@ -171,7 +184,31 @@ def autocast(args):
     return torch.autocast('cuda', dtype=torch.bfloat16, enabled=args.precision == 'bf16')
 
 
+def audit_zero_beta(model, loaders, args, records):
+    """Real Hiera/RFB features: beta=0 matches original replacement exactly."""
+    naf = load_module('skip_parity_reference', records / 'source/networks/naf_discrete.py')
+    reference = naf.CascadeDiscreteNAF2D(64)
+    enhancer = model.progressive_decoder.frequency_enhancer
+    reference.load_state_dict({key: value for key, value in enhancer.state_dict().items()
+                               if not key.startswith('betas.')}, strict=True)
+    reference.cuda().eval()
+    model.eval()
+    images, _, _ = next(iter(loaders['valid']))
+    with torch.no_grad(), autocast(args):
+        encoder_features = model.encoder(images.cuda(non_blocking=True))
+        features = [rfb(t) for rfb, t in zip(model.progressive_decoder.rfbs, encoder_features)]
+        old, new = reference(features), enhancer(features)
+        equal = all(torch.equal(a, b) for a, b in zip(old[0], new[0]))
+        equal = equal and all(torch.equal(a, b) for a, b in zip(old[1:], new[1:]))
+        if not equal or any(value.item() != 0 for value in enhancer.betas.values()):
+            raise RuntimeError('Zero-beta forward differs from original replacement')
+    write_json(records / 'zero_beta_parity.json', dict(all_four_features_equal=True,
+        regularizer_and_diagnostics_equal=True, beta_values={key: value.item() for key, value in enhancer.betas.items()}))
+
+
 def smoke(model, loaders, factories, args, records):
+    if args.variant == 'naf_replacement_skip':
+        audit_zero_beta(model, loaders, args, records)
     criterion, metric = factories['StructureLoss_binary'](), factories['IoU_binary']()
     optimizer = make_optimizer(model)
     model.train()
@@ -192,6 +229,12 @@ def smoke(model, loaders, factories, args, records):
         if not torch.isfinite(total):
             raise RuntimeError('Nonfinite smoke loss')
         total.backward()
+        if args.variant == 'naf_replacement_skip' and step == 0:
+            zero_gradients = gradient_report(model)
+            beta_gradients = zero_gradients['beta_gradients']
+            if any(value is None or not math.isfinite(value) or value == 0 for value in beta_gradients.values()):
+                raise RuntimeError(f'Zero-initialized beta cannot learn: {beta_gradients}')
+            write_json(records / 'zero_beta_gradients.json', zero_gradients)
         if step == args.steps - 1:
             gradients = gradient_report(model)
             check_gradients(gradients, args.variant)
@@ -301,6 +344,9 @@ def train(model, loaders, paired, factories, args, records, checkpoints):
                     torch.save(model.state_dict(), checkpoints / 'kvasir_best_model.pth')
         result.update(seconds=time.perf_counter() - epoch_start, best_iou=best_iou, best_epoch=best_epoch,
                       lr=[group['lr'] for group in optimizer.param_groups])
+        if args.variant == 'naf_replacement_skip':
+            result['betas'] = {key: value.item() for key, value in
+                              model.progressive_decoder.frequency_enhancer.betas.items()}
         append_json(records / 'epoch_metrics.jsonl', result)
         history.append(result)
         write_json(records / 'progress.json', dict(status='training', completed_epochs=epoch + 1,
@@ -336,6 +382,10 @@ def train(model, loaders, paired, factories, args, records, checkpoints):
                   elapsed_minutes=(time.perf_counter() - started) / 60,
                   checkpoints={p.name: file_hash(p) for p in checkpoints.glob('*.pth')})
     write_json(records / 'result.json', result)
+    if args.variant == 'naf_replacement_skip':
+        result['best_checkpoint_betas'] = {key: value.item() for key, value in
+                                          model.progressive_decoder.frequency_enhancer.betas.items()}
+        write_json(records / 'result.json', result)
     print('TRAIN_RESULT', json.dumps(result), flush=True)
     return result
 
@@ -385,6 +435,11 @@ def main():
         source = records / 'source'
         manifest = build('exp00_baseline_paired_strict_v2', source)
         shutil.copy2(NAF_FILE, source / 'networks/naf_discrete.py')
+        if args.variant == 'naf_replacement_skip':
+            shutil.copy2(SKIP_FILE, source / 'networks/naf_cross_scale_skip.py')
+            write_json(records / 'skip_definition.json', dict(formula='Di=NAFi(Pi,D{i+1})+beta_i*Up(D{i+1}); D4=P4',
+                beta_initial=0, beta_count=3, beta_constraint='unconstrained',
+                interpolation='bilinear', align_corners=True, module_sha256=file_hash(SKIP_FILE)))
         shutil.copy2(__file__, records / 'driver.py')
         sys.path.insert(0, str(source))
         import albumentations as A
