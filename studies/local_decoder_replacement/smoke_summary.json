@@ -1,0 +1,113 @@
+{
+  "date": "2026-10-28",
+  "hardware": {
+    "gpu": "RTX5070Ti 16GB",
+    "cpu": "Ryzen 9600X 6C12T",
+    "ram_gib": 15.6
+  },
+  "paired_initialization_verified": true,
+  "runs": [
+    {
+      "status": "completed",
+      "variant": "baseline",
+      "batch": 12,
+      "workers": 2,
+      "threads": 4,
+      "precision": "bf16",
+      "strict": true,
+      "steady_step_seconds": 0.27512107000802644,
+      "images_per_second": 43.61716098170856,
+      "inference_batch": 6,
+      "inference_batch_seconds": 0.094106037497113,
+      "estimated_20_epoch_compute_minutes": 7.32198628684273,
+      "peak_allocated_gib": 8.940431594848633,
+      "peak_reserved_gib": 9.798828125,
+      "gradient_checks": {
+        "encoder_adapters": 0.38671875,
+        "rfbs": 0.03564453125,
+        "head": 0.26171875,
+        "selector": null,
+        "fusion": null,
+        "output_projection": null,
+        "missing": []
+      },
+      "repeated_eval_equal": true,
+      "checkpoint_roundtrip_equal": true,
+      "records": "/home/lien/WorkSpace/PolypSegmentation/experiments/local_smoke_baseline_seed1234_20261028_004559_74834",
+      "initial_state": {
+        "shared_state_sha256": "1b2eae7536fb29dbc2d1eb15d7dd8c6ab3e3a02824cc98eabf66877748f746c9",
+        "parameters": 216419043,
+        "trainable_parameters": 4269747,
+        "cpu_rng_sha256": "595df72ddbc1d84f33883dc9709109b97745baf6cb056c0dc481734c0684ae07"
+      }
+    },
+    {
+      "status": "completed",
+      "variant": "naf_decoder",
+      "batch": 12,
+      "workers": 2,
+      "threads": 4,
+      "precision": "bf16",
+      "strict": true,
+      "steady_step_seconds": 0.35971284349943744,
+      "images_per_second": 33.359943123684346,
+      "inference_batch": 6,
+      "inference_batch_seconds": 0.10974212500150315,
+      "estimated_20_epoch_compute_minutes": 9.484626691829666,
+      "peak_allocated_gib": 9.290467262268066,
+      "peak_reserved_gib": 10.15625,
+      "gradient_checks": {
+        "encoder_adapters": 0.25390625,
+        "rfbs": 0.2109375,
+        "head": 0.1748046875,
+        "selector": 0.00020971318008378148,
+        "fusion": 0.0001357623841613531,
+        "output_projection": 0.004936343524605036,
+        "missing": []
+      },
+      "repeated_eval_equal": true,
+      "checkpoint_roundtrip_equal": true,
+      "records": "/home/lien/WorkSpace/PolypSegmentation/experiments/local_smoke_naf_decoder_seed1234_20261028_004640_75074",
+      "initial_state": {
+        "shared_state_sha256": "1b2eae7536fb29dbc2d1eb15d7dd8c6ab3e3a02824cc98eabf66877748f746c9",
+        "parameters": 216475161,
+        "trainable_parameters": 4325865,
+        "cpu_rng_sha256": "595df72ddbc1d84f33883dc9709109b97745baf6cb056c0dc481734c0684ae07"
+      }
+    },
+    {
+      "status": "completed",
+      "variant": "naf_replacement",
+      "batch": 12,
+      "workers": 2,
+      "threads": 4,
+      "precision": "bf16",
+      "strict": true,
+      "steady_step_seconds": 0.33194407249538926,
+      "images_per_second": 36.15066812246416,
+      "inference_batch": 6,
+      "inference_batch_seconds": 0.08441185700212372,
+      "estimated_20_epoch_compute_minutes": 8.640051477401963,
+      "peak_allocated_gib": 9.158017635345459,
+      "peak_reserved_gib": 9.998046875,
+      "gradient_checks": {
+        "encoder_adapters": 0.318359375,
+        "rfbs": 0.220703125,
+        "head": 0.0830078125,
+        "selector": 0.000938111450523138,
+        "fusion": 0.0010633524507284164,
+        "output_projection": 0.015103695914149284,
+        "missing": []
+      },
+      "repeated_eval_equal": true,
+      "checkpoint_roundtrip_equal": true,
+      "records": "/home/lien/WorkSpace/PolypSegmentation/experiments/local_smoke_naf_replacement_seed1234_20261028_004729_75305",
+      "initial_state": {
+        "shared_state_sha256": "1b2eae7536fb29dbc2d1eb15d7dd8c6ab3e3a02824cc98eabf66877748f746c9",
+        "parameters": 216142617,
+        "trainable_parameters": 3993321,
+        "cpu_rng_sha256": "595df72ddbc1d84f33883dc9709109b97745baf6cb056c0dc481734c0684ae07"
+      }
+    }
+  ]
+}

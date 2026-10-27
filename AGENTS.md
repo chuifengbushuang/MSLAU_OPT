@@ -2,6 +2,15 @@
 
 更新2026-10-27；用户最新要求优先。详细旧记录保存在Git历史，不再累积无关路线。
 
+- 2026-10-28最新授权覆盖下文旧“代理不启动训练”：用户要求在当前5070Ti机器实际执行smoke和正式训练，
+  seed固定1234，三组为原始无NAF基线、实验9离散级联NAF+原Decoder、同一NAF替换三个UpBlock并保留RFB/三输出头。
+  先检查资源、真实小批次速度/显存/梯度/推理，再报告时间；先核对baseline与0.8786相差不超过0.005再推进消融。
+  数据为仓库父目录datasets/Kvasir-SEG，官方权重为父目录checkpoints/sam2_hiera_large.fb_r1024.safetensors；
+  输出为父目录experiments、checkpoints、visualization下新的local_*运行目录，禁止覆盖同步的历史结果。
+  新工具tools/local_decoder_study.py统一三模型的输入、优化器、数值和输出协议，原冻结实验保持不变。
+  当前测试环境PyTorch2.13/CUDA13支持5070Ti，与3090/PyTorch2.1.2历史结果不等价；依赖隔离在父目录work/local_train_env。
+  所有正式模型从官方Hiera重新初始化，不能沿用smoke更新或已训练baseline；未达基线门槛时据实报告并排查，不挑seed。
+
 - 当前交接任务只整理两版NAF模块和说明，不替原实验者安排实验；用户所举四种组合仅作背景。
   reports/20261027_naf_module_handoff.md供对方在自己分支取模块、参考纯NAF补丁手动接入。
   模块源为已验证严格v2实验3/9的模型文件（与3.1/9.1字节相同），不要求增强/严格协议/研究启动器。
