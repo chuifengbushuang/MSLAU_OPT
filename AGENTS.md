@@ -8,6 +8,12 @@
   用户要求先smoke核对beta零初始化与旧替换版一致、beta及任务梯度、推理和重载，再实际训练20轮，
   seed1234/BF16/b12/nw2/CPU4线程/严格CUDA/paired_aug_v2全部沿用，以旧三组现有结果作对照，不重跑。
   新变体naf_replacement_skip，新增模块在studies/local_decoder_replacement/naf_cross_scale_skip.py，独立输出local_*目录。
+  已完成本次smoke及20轮：复评IoU0.856671427、Dice0.913853868、9.87分钟，较旧替换版/基线低0.4995/0.8888个百分点。
+  beta最佳权重值p1=-0.107307635、p2=0.112187989、p3=0.049804002；末5轮IoU均值0.852304102，无观察到收益。
+  33项CPU/工作流检查、真实Hiera零beta一致/梯度/推理smoke、40条输入/共享初值/RNG/环境/共同配置/AST计算核对均通过。
+  前三组不重跑、原输出未改；新运行local_train_naf_replacement_skip_seed1234_20261028_013534_88998保留三份完整权重。
+  报告studies/local_decoder_replacement/CROSS_SCALE_SKIP_RESULTS.md；分析父目录analysis/20261028_cross_scale_skip；
+  图像visualization/local_cross_scale_skip_20261028。单seed同验证集结果，未复现历史0.8786，不宣称跨seed稳定性。
 
 - 2026-10-28最新授权覆盖下文旧“代理不启动训练”：用户要求在当前5070Ti机器实际执行smoke和正式训练，
   seed固定1234，三组为原始无NAF基线、实验9离散级联NAF+原Decoder、同一NAF替换三个UpBlock并保留RFB/三输出头。
