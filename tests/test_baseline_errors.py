@@ -10,6 +10,7 @@ import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 import albumentations as A
 from albumentations.pytorch import ToTensorV2
@@ -79,6 +80,24 @@ class GeometryTests(unittest.TestCase):
 
 
 class RecordTests(unittest.TestCase):
+    def test_exp09_child_keeps_experiment_selection_and_independent_output(self):
+        experiment = 'exp09_naf_discrete_paired_strict_v2'
+        with tempfile.TemporaryDirectory() as temporary:
+            command = ['analyze_baseline_errors.py', '--experiment', experiment,
+                       '--runs', 'fixture_seed1234', '--output-root', temporary]
+            real_run = audit.subprocess.run
+            def only_mock_python(command, **kwargs):
+                if command[0] == sys.executable:
+                    return None
+                return real_run(command, **kwargs)
+            with patch.object(sys, 'argv', command), patch.object(audit.subprocess, 'run', side_effect=only_mock_python) as run:
+                audit.main()
+            # build() also calls subprocess.run for git apply; inspect the final child.
+            child = run.call_args.args[0]
+            self.assertEqual(child[child.index('--experiment') + 1], experiment)
+            self.assertTrue(child[child.index('--analysis-id') + 1].startswith('exp09_errors_v2_'))
+            self.assertEqual(run.call_args.kwargs['env']['CUBLAS_WORKSPACE_CONFIG'], ':4096:8')
+
     def test_preflight_rejects_wrong_source_weights_or_protocol(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -99,9 +118,13 @@ class RecordTests(unittest.TestCase):
             metadata = dict(status='completed', source=info, input_protocol='paired_aug_v2',
                             numerical_protocol='strict_cuda_v1', seed=1234,
                             checkpoint_sha256=audit.sha256(checkpoint), evaluation_metrics={'IoU': .8, 'dice': .9})
-            args = SimpleNamespace(dataset=dataset, output_root=root, runs=['run1'])
+            args = SimpleNamespace(dataset=dataset, output_root=root, runs=['run1'], experiment=audit.EXPERIMENT)
             audit.write_json(record, metadata)
             self.assertEqual(len(audit.preflight(args, source)[0]), 1)
+            args.experiment = 'exp09_naf_discrete_paired_strict_v2'
+            with self.assertRaisesRegex(ValueError, 'strict-v2'):
+                audit.preflight(args, source)
+            args.experiment = audit.EXPERIMENT
             metadata['input_protocol'] = 'paired_aug_v1'
             audit.write_json(record, metadata)
             with self.assertRaisesRegex(ValueError, 'strict-v2'):
@@ -176,6 +199,60 @@ class InferenceTests(unittest.TestCase):
             self.assertGreater(len(selection), 0)
             self.assertFalse(list(root.rglob('*.pth')))
             json.dumps(audit.summarize(rows), allow_nan=False)
+
+
+class MaskSensitivityTests(unittest.TestCase):
+    def test_mask_cli_reads_jpegs_without_changing_files(self):
+        import audit_mask_values as probe
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            masks = root / 'dataset/masks'
+            masks.mkdir(parents=True)
+            split = ROOT / 'experiments/exp00_baseline/configs/splits/kvasir/val.txt'
+            ids = [line.strip() for line in split.read_text().splitlines() if line.strip()]
+            ids = [name if Path(name).suffix else name + '.jpg' for name in ids]
+            raw = np.zeros((64, 64), np.uint8)
+            cv2.circle(raw, (31, 31), 13, 255, -1)
+            for name in ids:
+                self.assertTrue(cv2.imwrite(str(masks / name), raw))
+            before = [audit.sha256(masks / name) for name in ids]
+            with patch.object(sys, 'argv', ['audit_mask_values.py', '--dataset', str(masks.parent),
+                                           '--output-root', str(root / 'output')]):
+                probe.main()
+            report = next((root / 'output/experiments').glob('mask_values_v2_*/summary.json'))
+            summary = json.loads(report.read_text())
+            self.assertEqual(summary['images'], 120)
+            self.assertTrue(summary['training_gt_unchanged'])
+            self.assertGreater(summary['total_added_pixels_gt0'], 0)
+            self.assertEqual([audit.sha256(masks / name) for name in ids], before)
+
+    def test_uint8_and_float_readers_use_equivalent_thresholds(self):
+        from audit_mask_values import compare_masks
+        raw = np.zeros((352, 352), np.uint8)
+        raw[80:120, 80:120] = 255
+        raw[5, 5] = 2
+        raw[20, 20] = 127
+        raw[40, 40] = 128
+        a, masks_a = compare_masks(raw)
+        b, masks_b = compare_masks(raw.astype(np.float64) / 255)
+        self.assertEqual(a, b)
+        self.assertEqual(a['added_pixels_gt0'], 2)
+        self.assertEqual(a['current_components'], 4)
+        self.assertEqual(a['diagnostic_components'], 2)
+        self.assertEqual(a['current_tiny_components_le4px'], 3)
+        for x, y in zip(masks_a, masks_b):
+            np.testing.assert_array_equal(x, y)
+        np.testing.assert_array_equal(raw[80:120, 80:120], np.full((40, 40), 255, np.uint8))
+
+    def test_binary_masks_are_unchanged_and_nonfinite_values_rejected(self):
+        from audit_mask_values import compare_masks
+        raw = np.zeros((352, 352), np.uint8)
+        raw[50:100, 50:100] = 255
+        values, _ = compare_masks(raw)
+        self.assertEqual(values['diagnostic_mask_iou'], 1)
+        self.assertEqual(values['added_pixels_gt0'], 0)
+        with self.assertRaisesRegex(ValueError, 'finite grayscale'):
+            compare_masks(np.full((10, 10), np.nan))
 
 
 if __name__ == '__main__':

@@ -89,3 +89,47 @@ PYTHONDONTWRITEBYTECODE=1 NO_ALBUMENTATIONS_UPDATE=1 \
 覆盖错误区域分解、空预测、触边目标、面积边界、聚合分母、错误权重/源码/协议拒绝、跨seed输入拒绝，
 以及原始预处理/指标下小网络的真实CPU推理和图像导出（参数和梯度不变）。
 本地不具备服务器的完整训练权重和真实验证数据；实际Hiera复评一致性由服务器命令检查。
+
+## 2026-10-27：现有实验9逐图复评与mask数值检查
+
+首批基线报告已回收并核对。实验9严格v2三seed整体没有稳定增益；本轮先做以下两项分析，不新增训练。
+原基线的分析目录和评估口径保留。分析入口新增显式`--experiment`，仅接受基线与已经完成的实验9；
+实验9仍加载自己的原源码/原选择器，不使用基线架构加载NAF权重。源码、权重SHA与旧评估指标同样核对。
+
+```bash
+git pull --ff-only origin exp/p51-independent
+```
+
+```bash
+(
+    set -e
+    export PYTHONDONTWRITEBYTECODE=1
+    export NO_ALBUMENTATIONS_UPDATE=1
+    /home/le/miniconda3/envs/mslau-p51/bin/python -u tools/audit_mask_values.py \
+        --output-root /data/models/le/mslau-net
+    /home/le/miniconda3/envs/mslau-p51/bin/python -u tools/analyze_baseline_errors.py \
+        --experiment exp09_naf_discrete_paired_strict_v2 \
+        --gpu 3 --output-root /data/models/le/mslau-net \
+        --runs \
+        exp09_naf_discrete_paired_strict_v2_seed1234_20261027_191711_1169182_r1 \
+        exp09_naf_discrete_paired_strict_v2_seed42_20261027_194428_1247240_r1 \
+        exp09_naf_discrete_paired_strict_v2_seed2026_20261027_201211_1323241_r1
+)
+```
+
+同步以下新目录即可，不同步权重：
+
+```text
+/data/models/le/mslau-net/experiments/mask_values_v2_…
+/data/models/le/mslau-net/experiments/exp09_errors_v2_…
+/data/models/le/mslau-net/visualization/exp09_errors_v2_…
+```
+
+mask检查只在CPU读取原文件，对比原`gray>0`与诊断用的`gray>0.5`（按dtype归一到0–1），
+先阈值化再最近邻缩放352，与原loader顺序一致。报告低灰度值、面积变化、两种mask的IoU、
+连通区域数及<=4像素小区域数。它不修改磁盘mask，不改变训练GT，也不以0.5直接替代原评估。
+120张GT在原>0口径下的连通区域数中位数30、最大83，不能解释为真实息肉个数；
+是否由JPEG低灰度像素等造成需查原mask，不能仅凭报告预先下结论。
+
+下一次将实验9与已有基线逐图、逐seed配对，比较边界F1、内部FN、背景FP和小面积组。
+已有基线不用重复推理；候选图不能按单个seed的最好结果挑选，主要结论仍报告全部120张及三seed。

@@ -1,4 +1,4 @@
-"""Inference-only diagnosis of the three completed strict-v2 baseline checkpoints.
+"""Inference-only diagnosis of completed strict-v2 baseline or experiment-9 checkpoints.
 
 Uses the frozen evaluator's loader, preprocessing and metrics, not a new model.
 All masks/metrics are measured on the original evaluation grid (352 x 352).
@@ -21,6 +21,7 @@ import numpy as np
 from build_experiment import ROOT, build
 
 EXPERIMENT = 'exp00_baseline_paired_strict_v2'
+EXPERIMENTS = (EXPERIMENT, 'exp09_naf_discrete_paired_strict_v2')
 RADII = (2, 4, 8)
 SIZE_BINS = ('<1%', '1-5%', '5-20%', '>=20%')
 
@@ -261,12 +262,15 @@ def preflight(args, source):
             raise ValueError(f'Expected a run directory name: {run_id}')
         record = args.output_root / 'experiments' / run_id / 'manifest.json'
         metadata = json.loads(record.read_text())
-        if (metadata['status'] != 'completed' or metadata['source']['experiment'] != EXPERIMENT
+        if (metadata['status'] != 'completed' or metadata['source']['experiment'] != args.experiment
                 or metadata.get('input_protocol') != 'paired_aug_v2'
                 or metadata.get('numerical_protocol') != 'strict_cuda_v1'):
-            raise ValueError(f'Not a completed strict-v2 baseline: {run_id}')
-        for name in ('networks/mslau_net.py', 'loader.py', 'kvasir_test.py', 'strict_runtime.py',
-                     'configs/splits/kvasir/val.txt'):
+            raise ValueError(f'Not a completed strict-v2 {args.experiment}: {run_id}')
+        names = ['networks/mslau_net.py', 'loader.py', 'kvasir_test.py', 'strict_runtime.py',
+                 'configs/splits/kvasir/val.txt']
+        if args.experiment != EXPERIMENT:
+            names.append('networks/naf_discrete.py')
+        for name in names:
             if sha256(source / name) != metadata['source']['files'][name]:
                 raise ValueError(f'Evaluation source differs from training record: {run_id}: {name}')
         checkpoint = args.output_root / 'checkpoints' / run_id / 'kvasir_best_model.pth'
@@ -398,15 +402,18 @@ def worker(args):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--runs', nargs='+', required=True, help='completed strict-v2 baseline run IDs, one per seed')
+    parser.add_argument('--experiment', choices=EXPERIMENTS, default=EXPERIMENT)
+    parser.add_argument('--runs', nargs='+', required=True, help='completed strict-v2 run IDs, one per seed')
     parser.add_argument('--dataset', type=Path, default=Path('/data/dataset/zsy/mslau-net/Kvasir-SEG'))
     parser.add_argument('--output-root', type=Path,
                         default=Path(os.environ.get('P51_OUTPUT_ROOT', '/data/models/le/mslau-net')))
     parser.add_argument('--gpu', type=int, default=3)
-    parser.add_argument('--analysis-id', default='baseline_errors_v2_' +
-                        datetime.datetime.now().strftime('%Y%m%d_%H%M%S') + f'_{os.getpid()}')
+    parser.add_argument('--analysis-id')
     parser.add_argument('--worker-source', type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args()
+    if args.analysis_id is None:
+        prefix = 'baseline_errors_v2_' if args.experiment == EXPERIMENT else 'exp09_errors_v2_'
+        args.analysis_id = prefix + datetime.datetime.now().strftime('%Y%m%d_%H%M%S') + f'_{os.getpid()}'
     if not re.fullmatch(r'[A-Za-z0-9_-]+', args.analysis_id) or args.gpu < 0:
         parser.error('Use a simple new analysis ID and a nonnegative physical GPU index')
     args.dataset = args.dataset.resolve()
@@ -416,10 +423,11 @@ def main():
         return
     with tempfile.TemporaryDirectory(prefix='p51_error_analysis_') as temporary:
         source = Path(temporary) / 'source'
-        build(EXPERIMENT, source)
+        build(args.experiment, source)
         command = [sys.executable, '-u', str(Path(__file__).resolve()), '--worker-source', str(source),
                    '--dataset', str(args.dataset), '--output-root', str(args.output_root),
-                   '--analysis-id', args.analysis_id, '--gpu', str(args.gpu), '--runs', *args.runs]
+                   '--analysis-id', args.analysis_id, '--gpu', str(args.gpu),
+                   '--experiment', args.experiment, '--runs', *args.runs]
         subprocess.run(command, check=True, cwd=ROOT,
                        env=dict(os.environ, CUDA_VISIBLE_DEVICES=str(args.gpu),
                                 CUBLAS_WORKSPACE_CONFIG=':4096:8', NO_ALBUMENTATIONS_UPDATE='1',
