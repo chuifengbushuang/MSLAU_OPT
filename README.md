@@ -3,14 +3,14 @@
 研究分支exp/p51-independent，直接基于原实验者最新提交81b19e2。
 目标：原始三seed baseline → 单个NAF候选 → 匹配比较和迭代，不追历史峰值。
 
-历史候选实验9 `exp09_naf_discrete`：保留实验7三级级联，训练按样本抽取90%共轭频率对、评估确定性Top-K，去掉内部alpha，对评分V施加分段平方L2正则，固定六项均值归约。目前先修复输入协议，不继续安排旧实验9训练。
-实验9接入已有paired_aug_v1输入协议，对照应使用`exp00_baseline_paired_aug_v1`；旧实验0–8保持原样，旧NAF结果只作参考。
-实现边界、合成检查和正式三seed命令见[实验9说明](experiments/exp09_naf_discrete/README.md)。本地检查不替代3090完整Hiera检查，不代表已有训练收益。
+候选采用实验9的三级级联、90%共轭频率对选择和评分V分段正则，无内部alpha。历史实验9使用有增强联动缺陷的paired_aug_v1，旧结果仅作参考，不与本轮v2基线混用。
 
-当前暂停扩展模型实验，先检查配对输入基线的CUDA数值可重复性。服务器已确认两个上采样用例在普通模式下梯度有微小差异，在严格模式下5次逐位相同；尚不能据此解释完整训练的IoU波动。
+已完成配对输入基线的CUDA数值可重复性排查。服务器确认两个上采样用例在普通模式下梯度有微小差异，在严格模式下5次逐位相同；不能据此解释全部历史IoU差距。
 完整基线短步对照及严格v1的seed1234两次完整训练已完成：两次20轮状态/指标/最佳权重一致，最佳IoU均0.853762。
-2026-10-27发现逐样本Compose.set_random_seed使子变换同起点，引入增强联动；此前仅检查重复性，遗漏联合分布。当前应使用独立`exp00_baseline_paired_strict_v2`的共享推进随机流，保持采样顺序、原训练配方和严格CUDA执行不变。修复依据、CPU检查与单次训练命令见[v2说明](experiments/exp00_baseline_paired_strict_v2/README.md)；旧定义/结果保留，暂缓尚未启动的v1补训。代理不代启动训练。
-完整基线短步重放使用独立工具，不修改任何实验定义：
+2026-10-27发现逐样本Compose.set_random_seed使子变换同起点，引入增强联动；此前仅检查重复性，遗漏联合分布。当前使用独立`exp00_baseline_paired_strict_v2`共享推进随机流，保持采样顺序、原训练配方和严格CUDA执行不变。服务器CPU检查已通过，1234两次完整20轮的输入/指标/数值状态及三份权重哈希相同；三seed最佳IoU均值0.871383、样本SD0.004720。旧定义/结果保留，不再补训v1。
+
+下一步固定v2协议，只重测两组既有模型：[仅级联融合](experiments/exp08_cascade_fusion_paired_strict_v2/README.md)与[完整离散NAF](experiments/exp09_naf_discrete_paired_strict_v2/README.md)，已有v2基线不重跑。模型文件分别与旧实验8/9逐字节相同，输入和严格CUDA协议匹配v2基线。合成检查与正式六次命令见上述说明；仅融合→NAF衡量频率选择与正则的组合收益，不能单独归因于频率。代理不代启动训练。
+以下短步重放工具仅保留用于诊断，当前无需重跑；它不修改任何实验定义：
 
 ```bash
 /home/le/miniconda3/envs/mslau-p51/bin/python -u tools/check_baseline_numerics.py --gpu 0 --seed 1234 --mode strict --steps 3
@@ -34,6 +34,8 @@ experiments/
   exp07_naf_cascade/    三级双输入NAF级联，独立补丁和模型文件
   exp08_cascade_fusion/ 实验7的仅级联融合对照，独立源码，频率及正则关闭
   exp09_naf_discrete/   三级级联＋离散频率选择＋评分V正则，输入采用paired_aug_v1
+  exp08_cascade_fusion_paired_strict_v2/ 仅融合，匹配已完成的v2基线
+  exp09_naf_discrete_paired_strict_v2/ 完整离散NAF，匹配v2基线/仅融合
   shared_naf_v1/        NAF实验共用的changes.patch、added/和方法说明
 tools/
   build_experiment.py   基线＋单个实验差异 → 完整源码
