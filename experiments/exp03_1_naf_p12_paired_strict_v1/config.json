@@ -1,0 +1,32 @@
+{
+  "id": "exp03_1_naf_p12_paired_strict_v1",
+  "base_commit": "81b19e2c801efcf74826b8127f5ea712b0247ec5",
+  "train_options": {
+    "decoder_mode": "p5_sam2unet",
+    "encoder_name": "sam2_hiera_large",
+    "hiera_checkpoint": "/data/models/zsy/mslau-net/pretrained/sam2_hiera_large.fb_r1024.safetensors",
+    "loss": "structure",
+    "img_size": 352,
+    "batch": 12,
+    "num_workers": 8,
+    "epoch": 20,
+    "encoder_lr": "1e-3",
+    "decoder_lr": "1e-3",
+    "aux_d2_weight": 1.0,
+    "aux_d3_weight": 1.0,
+    "boundary_weight": 0.0,
+    "naf_stages": "1,2",
+    "naf_reg_weight": 0.001
+  },
+  "eval_options": {
+    "decoder_mode": "p5_sam2unet",
+    "encoder_name": "sam2_hiera_large",
+    "img_size": 352,
+    "batch": 8,
+    "num_workers": 0,
+    "debug": "false",
+    "naf_stages": "1,2"
+  },
+  "input_protocol": "paired_aug_v1",
+  "numerical_protocol": "strict_cuda_v1"
+}
