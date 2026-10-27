@@ -1,0 +1,176 @@
+--- a/networks/mslau_net.py
++++ b/networks/mslau_net.py
+@@ -7,6 +7,7 @@
+ from timm.layers import trunc_normal_, DropPath, to_2tuple
+ import copy
+
++from networks.naf_select_reg import PyramidNAF2D
+ from networks.msla import MSLA
+ from networks.edge_guidance import EdgeGuidedAttention
+
+@@ -859,7 +860,7 @@
+     """Official RFB + U-shaped decoder with two deeply supervised outputs."""
+
+     def __init__(self, encoder_channels=(144, 288, 576, 1152), channels=64,
+-                 num_classes=1):
++                 num_classes=1, naf_stages=(1, 2)):
+         super().__init__()
+         self.rfbs = nn.ModuleList([
+             RFBModified(in_channels, channels) for in_channels in encoder_channels
+@@ -870,6 +871,7 @@
+         self.side1 = nn.Conv2d(channels, num_classes, 1)
+         self.side2 = nn.Conv2d(channels, num_classes, 1)
+         self.head = nn.Conv2d(channels, num_classes, 1)
++        self.frequency_enhancer = PyramidNAF2D(naf_stages)
+
+     @staticmethod
+     def resize_logits(logits, output_size):
+@@ -878,9 +880,9 @@
+             mode="bilinear", align_corners=False)
+
+     def forward(self, encoder_features, output_size, return_aux=False):
+-        e1, e2, e3, e4 = [
+-            rfb(feature) for rfb, feature in zip(self.rfbs, encoder_features)
+-        ]
++        features = [rfb(feature) for rfb, feature in zip(self.rfbs, encoder_features)]
++        features, naf_regularization, naf_stats = self.frequency_enhancer(features)
++        e1, e2, e3, e4 = features
+         d3 = self.up1(e4, e3)
+         d2 = self.up2(d3, e2)
+         d1 = self.up3(d2, e1)
+@@ -891,6 +893,8 @@
+             "logits": logits,
+             "aux_d2": self.resize_logits(self.side2(d2), output_size),
+             "aux_d3": self.resize_logits(self.side1(d3), output_size),
++            "naf_regularization": naf_regularization,
++            "naf_stats": naf_stats,
+         }
+
+
+@@ -901,7 +905,7 @@
+                  decoder_mode="legacy", progressive_channels=96,
+                  p3_use_wavelet_edges=True, p3_use_reverse_attention=True,
+                  encoder_name="mslau", hiera_checkpoint=None,
+-                 freeze_hiera_backbone=True):
++                 freeze_hiera_backbone=True, naf_stages=(1, 2)):
+         super(MSLAU_net, self).__init__()
+         if decoder_mode not in {
+                 "legacy", "progressive_wavelet", "cascade_reverse",
+@@ -983,6 +987,7 @@
+                     encoder_channels=encoder_channels,
+                     channels=64,
+                     num_classes=num_classes,
++                    naf_stages=naf_stages,
+                 )
+
+     def forward(self, inputs, return_aux=False, return_features=False):
+--- a/kvasir_train.py
++++ b/kvasir_train.py
+@@ -28,6 +28,7 @@
+     StructureLoss_binary,
+ )
+ from networks.mslau_net import MSLAU_net
++from networks.naf_select_reg import STATS_NAMES, parse_stages
+
+ if platform.system() != "Windows":
+     pathlib.WindowsPath = pathlib.PosixPath
+@@ -261,6 +262,7 @@
+             running_iou = 0.0
+             running_distill_loss = 0.0
+             running_samples = 0
++            running_naf_stats = None
+
+             for inputs, labels, _ in dataloaders[phase]:
+                 if torch.cuda.is_available():
+@@ -315,6 +317,13 @@
+                         outputs = model_outputs
+                         main_loss = criterion(outputs, labels)
+                         loss = main_loss
++                    naf_regularization = model_outputs["naf_regularization"]
++                    # Validation and checkpoint criteria retain the original loss.
++                    if phase == "train":
++                        loss = loss + model.naf_reg_weight * naf_regularization
++                    naf_stats = model_outputs["naf_stats"].detach() * inputs.size(0)
++                    running_naf_stats = (naf_stats if running_naf_stats is None
++                                         else running_naf_stats + naf_stats)
+                     distill_loss = outputs.new_zeros(())
+                     if distiller is not None and phase == "train":
+                         distill_loss = distiller(
+@@ -342,6 +351,11 @@
+                 "{} Loss: {:.4f} MainLoss: {:.4f} DistillLoss: {:.4f} IoU: {:.4f}".format(
+                     phase, epoch_loss, epoch_main_loss,
+                     epoch_distill_loss, epoch_acc))
++
++            stages = model.progressive_decoder.frequency_enhancer.active_stages
++            for stage, stats in zip(stages, (running_naf_stats / running_samples).cpu().tolist()):
++                logging.info("%s NAF P%d: %s", phase, stage,
++                             ", ".join("%s=%.6f" % pair for pair in zip(STATS_NAMES, stats)))
+
+             loss_list[phase].append(epoch_main_loss)
+             accuracy_list[phase].append(epoch_acc)
+@@ -497,7 +511,15 @@
+         choices=["fixed", "lff_scale"],
+         help="feature fusion mode in Conv_MLA",
+     )
++    parser.add_argument("--naf_stages", type=parse_stages, default="1,2",
++                        help="active anatomical feature levels, e.g. 1,2,3,4 or 3,4")
++    parser.add_argument("--naf_reg_weight", type=float, default=1e-3,
++                        help="piecewise penalty with fixed denominator 4")
+     args = parser.parse_args()
++    if args.decoder_mode != "p5_sam2unet":
++        parser.error("NAF experiments require --decoder_mode p5_sam2unet")
++    if args.naf_reg_weight < 0:
++        parser.error("--naf_reg_weight must be nonnegative")
+     seed = args.seed
+     torch.manual_seed(seed)
+     np.random.seed(seed)
+@@ -562,6 +584,7 @@
+         encoder_name=args.encoder_name,
+         hiera_checkpoint=(
+             resolve_path(args.hiera_checkpoint) if args.hiera_checkpoint else None),
++        naf_stages=args.naf_stages,
+     )
+     logging.info("Encoder: %s", model.encoder_name)
+     logging.info("Decoder mode: %s", model.decoder_mode)
+@@ -611,6 +634,11 @@
+             model.encoder.freeze_backbone,
+             args.aux_d2_weight, args.aux_d3_weight,
+         )
++    model.naf_reg_weight = args.naf_reg_weight
++    logging.info("NAF configuration: stages=%s keep=0.9 temperature=0.1 "
++                 "alpha_init=0.1 alpha_max=0.25 lambda=%.6g "
++                 "regularizer=sum(active R_n)/4; R_n=mean(batch,nonDC weighted frequencies)",
++                 args.naf_stages, args.naf_reg_weight)
+     if args.encoder_name == "mslau":
+         load_encoder_pretrained(model, args.pretrained)
+     elif args.pretrained:
+--- a/kvasir_test.py
++++ b/kvasir_test.py
+@@ -13,6 +13,7 @@
+
+ from loader import binary_class
+ from networks.mslau_net import MSLAU_net
++from networks.naf_select_reg import parse_stages
+
+ if platform.system() != "Windows":
+     pathlib.WindowsPath = pathlib.PosixPath
+@@ -148,7 +149,11 @@
+                         help="disable the P3 wavelet edge multiplication gate")
+     parser.add_argument("--disable_p3_reverse_attention", action="store_true",
+                         help="disable the P3 reverse-attention multiplication gate")
++    parser.add_argument("--naf_stages", type=parse_stages, default="1,2",
++                        help="must match training checkpoint feature levels")
+     args = parser.parse_args()
++    if args.decoder_mode != "p5_sam2unet":
++        parser.error("NAF experiments require --decoder_mode p5_sam2unet")
+
+     dataset_path = resolve_path(args.dataset)
+     split_txt = resolve_path(args.split_txt)
+@@ -191,6 +196,7 @@
+         p3_use_wavelet_edges=not args.disable_p3_wavelet_edge,
+         p3_use_reverse_attention=not args.disable_p3_reverse_attention,
+         encoder_name=args.encoder_name,
++        naf_stages=args.naf_stages,
+     )
+     model.load_state_dict(torch.load(model_path, map_location=device, weights_only=False))
+     model = model.to(device)

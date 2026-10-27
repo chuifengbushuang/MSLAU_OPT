@@ -1,0 +1,97 @@
+--- a/networks/mslau_net.py
++++ b/networks/mslau_net.py
+@@ -7,6 +7,7 @@
+ from timm.layers import trunc_normal_, DropPath, to_2tuple
+ import copy
+
++from networks.naf_discrete import CascadeDiscreteNAF2D
+ from networks.msla import MSLA
+ from networks.edge_guidance import EdgeGuidedAttention
+
+@@ -870,6 +871,7 @@
+         self.side1 = nn.Conv2d(channels, num_classes, 1)
+         self.side2 = nn.Conv2d(channels, num_classes, 1)
+         self.head = nn.Conv2d(channels, num_classes, 1)
++        self.frequency_enhancer = CascadeDiscreteNAF2D(channels)
+
+     @staticmethod
+     def resize_logits(logits, output_size):
+@@ -878,9 +880,9 @@
+             mode="bilinear", align_corners=False)
+
+     def forward(self, encoder_features, output_size, return_aux=False):
+-        e1, e2, e3, e4 = [
+-            rfb(feature) for rfb, feature in zip(self.rfbs, encoder_features)
+-        ]
++        features = [rfb(feature) for rfb, feature in zip(self.rfbs, encoder_features)]
++        features, naf_regularization, naf_stats, naf_fusion_stats = self.frequency_enhancer(features)
++        e1, e2, e3, e4 = features
+         d3 = self.up1(e4, e3)
+         d2 = self.up2(d3, e2)
+         d1 = self.up3(d2, e1)
+@@ -891,6 +893,9 @@
+             "logits": logits,
+             "aux_d2": self.resize_logits(self.side2(d2), output_size),
+             "aux_d3": self.resize_logits(self.side1(d3), output_size),
++            "naf_regularization": naf_regularization,
++            "naf_stats": naf_stats,
++            "naf_fusion_stats": naf_fusion_stats,
+         }
+
+
+--- a/kvasir_train.py
++++ b/kvasir_train.py
+@@ -262,7 +262,7 @@
+             running_distill_loss = 0.0
+             running_samples = 0
+
+-            for inputs, labels, _ in dataloaders[phase]:
++            for inputs, labels, image_ids in dataloaders[phase]:
+                 if torch.cuda.is_available():
+                     inputs = Variable(inputs.cuda())
+                     labels = Variable(labels.cuda())
+@@ -274,6 +274,9 @@
+                     labels = labels.unsqueeze(1)
+
+                 optimizer.zero_grad()
++                if phase == "train":
++                    model.progressive_decoder.frequency_enhancer.set_selection_context(
++                        model.naf_seed, epoch, image_ids)
+                 with torch.set_grad_enabled(phase == "train"):
+                     model_outputs = model(
+                         inputs,
+@@ -315,6 +318,9 @@
+                         outputs = model_outputs
+                         main_loss = criterion(outputs, labels)
+                         loss = main_loss
++                    # Keep the original validation and checkpoint loss.
++                    if phase == "train":
++                        loss = loss + model.naf_reg_weight * model_outputs["naf_regularization"]
+                     distill_loss = outputs.new_zeros(())
+                     if distiller is not None and phase == "train":
+                         distill_loss = distiller(
+@@ -497,7 +503,13 @@
+         choices=["fixed", "lff_scale"],
+         help="feature fusion mode in Conv_MLA",
+     )
++    parser.add_argument("--naf_reg_weight", type=float, default=1e-3,
++                        help="score-V piecewise penalty: six branch means / 6")
+     args = parser.parse_args()
++    if args.decoder_mode != "p5_sam2unet":
++        parser.error("Discrete NAF requires --decoder_mode p5_sam2unet")
++    if not 0 <= args.naf_reg_weight < float("inf"):
++        parser.error("--naf_reg_weight must be finite and nonnegative")
+     seed = args.seed
+     torch.manual_seed(seed)
+     np.random.seed(seed)
+@@ -611,6 +623,10 @@
+             model.encoder.freeze_backbone,
+             args.aux_d2_weight, args.aux_d3_weight,
+         )
++    model.naf_reg_weight = args.naf_reg_weight
++    model.naf_seed = int(args.seed)
++    logging.info("NAF: discrete cascade; keep=0.9; score-V regularizer=sum(six means)/6; lambda=%g",
++                 model.naf_reg_weight)
+     if args.encoder_name == "mslau":
+         load_encoder_pretrained(model, args.pretrained)
+     elif args.pretrained:
