@@ -12,6 +12,8 @@ from build_experiment import build
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--experiment', default='exp00_baseline_paired_aug_v1',
+                        choices=['exp00_baseline_paired_aug_v1', 'exp00_baseline_paired_strict_v2'])
     parser.add_argument('--dataset', default='/data/dataset/zsy/mslau-net/Kvasir-SEG')
     parser.add_argument('--seed', type=int, default=1234)
     parser.add_argument('--workers', type=int, default=8)
@@ -19,11 +21,12 @@ def main():
     parser.add_argument('--output', type=Path)
     args = parser.parse_args()
     output = args.output or (Path(os.environ.get('P51_OUTPUT_ROOT', '/data/models/le/mslau-net')) /
-                            'experiments' / ('paired_aug_v1_input_check_' +
+                            'experiments' / (('paired_aug_v2' if args.experiment.endswith('strict_v2')
+                                              else 'paired_aug_v1') + '_input_check_' +
                             datetime.datetime.now().strftime('%Y%m%d_%H%M%S') + f'_{os.getpid()}.json'))
     with tempfile.TemporaryDirectory(prefix='p51_paired_input_check_') as temporary:
         source = Path(temporary) / 'source'
-        build('exp00_baseline_paired_aug_v1', source)
+        build(args.experiment, source)
         subprocess.run([sys.executable, str(source / 'check_inputs.py'), '--dataset', args.dataset,
                         '--seed', str(args.seed), '--workers', str(args.workers),
                         '--epochs', str(args.epochs), '--output', str(output.resolve())],

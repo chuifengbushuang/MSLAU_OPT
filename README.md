@@ -3,12 +3,13 @@
 研究分支exp/p51-independent，直接基于原实验者最新提交81b19e2。
 目标：原始三seed baseline → 单个NAF候选 → 匹配比较和迭代，不追历史峰值。
 
-当前候选为实验9 `exp09_naf_discrete`：保留实验7三级级联，训练按样本抽取90%共轭频率对、评估确定性Top-K，去掉内部alpha，对评分V施加分段平方L2正则，固定六项均值归约。
+历史候选实验9 `exp09_naf_discrete`：保留实验7三级级联，训练按样本抽取90%共轭频率对、评估确定性Top-K，去掉内部alpha，对评分V施加分段平方L2正则，固定六项均值归约。目前先修复输入协议，不继续安排旧实验9训练。
 实验9接入已有paired_aug_v1输入协议，对照应使用`exp00_baseline_paired_aug_v1`；旧实验0–8保持原样，旧NAF结果只作参考。
 实现边界、合成检查和正式三seed命令见[实验9说明](experiments/exp09_naf_discrete/README.md)。本地检查不替代3090完整Hiera检查，不代表已有训练收益。
 
 当前暂停扩展模型实验，先检查配对输入基线的CUDA数值可重复性。服务器已确认两个上采样用例在普通模式下梯度有微小差异，在严格模式下5次逐位相同；尚不能据此解释完整训练的IoU波动。
-完整基线短步对照现已完成：同一GPU3的普通模式首次前向一致、首次反向出现差异，严格模式三个更新全部一致。下一步使用独立的`exp00_baseline_paired_strict_v1`验证两次seed1234完整训练；原配方与旧实验不变，方法、状态记录及命令见[严格基线说明](experiments/exp00_baseline_paired_strict_v1/README.md)。代理不代启动训练。
+完整基线短步对照及严格v1的seed1234两次完整训练已完成：两次20轮状态/指标/最佳权重一致，最佳IoU均0.853762。
+2026-10-27发现逐样本Compose.set_random_seed使子变换同起点，引入增强联动；此前仅检查重复性，遗漏联合分布。当前应使用独立`exp00_baseline_paired_strict_v2`的共享推进随机流，保持采样顺序、原训练配方和严格CUDA执行不变。修复依据、CPU检查与单次训练命令见[v2说明](experiments/exp00_baseline_paired_strict_v2/README.md)；旧定义/结果保留，暂缓尚未启动的v1补训。代理不代启动训练。
 完整基线短步重放使用独立工具，不修改任何实验定义：
 
 ```bash
@@ -24,6 +25,7 @@ experiments/
   exp00_baseline/       原始14文件＋run.py/config.json/说明
   exp00_baseline_paired_aug_v1/ 原增强不变，独立控制输入随机性和记录
   exp00_baseline_paired_strict_v1/ 同一输入算法＋严格CUDA执行，完整重复验证
+  exp00_baseline_paired_strict_v2/ 修复增强子流联动，采样顺序和严格CUDA协议不变
   exp01_naf_all/        四层完整模型配置
   exp02_naf_p34/        仅P3/P4配置
   exp03_naf_p12/        仅P1/P2配置
