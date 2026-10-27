@@ -14,6 +14,11 @@
   因此不再以该历史门槛阻断NAF训练。三组共同使用BF16/b12/nw2/CPU4线程/seed1234/20轮。
   已验证当前完整初值与历史v2 seed1234逐位一致，40条输入指纹完全一致；历史同协议IoU0.868227，本就低于原0.8786。
   额外FP32定位运行在用户澄清后停止，保留stopped.json与部分记录，不纳入三组正式比较；两组NAF继续实际训练。
+  本批三组已完成并严格重载复评：baseline IoU0.865559723、NAF+Decoder0.864684848、NAF替换0.861666300；
+  分别8.64/10.32/9.81分钟，替换较baseline/NAF+Decoder低0.3893/0.3019个百分点；单seed、相同120张验证集。
+  三组共享层初值/RNG、40条输入指纹、driver/模块哈希和共同配置全部一致；29项CPU/工作流检查通过。
+  模型保留三份完整权重，产物均为父目录新的local_*目录；总结studies/local_decoder_replacement/RESULTS.md，
+  详细核对在父目录analysis/20261028_local_decoder_study，学习曲线在visualization/local_decoder_study_20261028。
 
 - 当前交接任务只整理两版NAF模块和说明，不替原实验者安排实验；用户所举四种组合仅作背景。
   reports/20261027_naf_module_handoff.md供对方在自己分支取模块、参考纯NAF补丁手动接入。

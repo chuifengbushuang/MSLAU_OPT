@@ -1,0 +1,73 @@
+{
+  "date": "2026-10-28",
+  "seed": 1234,
+  "precision": "bf16",
+  "runs": [
+    {
+      "variant": "baseline",
+      "label": "Original baseline",
+      "iou": 0.8655597229177753,
+      "dice": 0.9187298882131775,
+      "precision": 0.9186679189636683,
+      "recall": 0.9389104957381884,
+      "best_epoch": 19,
+      "elapsed_minutes": 8.643201615583287,
+      "parameters": 216419043,
+      "trainable_parameters": 4269747,
+      "records": "/home/lien/WorkSpace/PolypSegmentation/experiments/local_train_baseline_seed1234_20261028_004839_75754",
+      "checkpoint": "/home/lien/WorkSpace/PolypSegmentation/checkpoints/local_train_baseline_seed1234_20261028_004839_75754/kvasir_best_model.pth",
+      "delta_vs_baseline_percentage_points": 0.0,
+      "delta_vs_naf_decoder_percentage_points": 0.0874875206500203,
+      "delta_vs_reference_percentage_points": -1.3040277082224772
+    },
+    {
+      "variant": "naf_decoder",
+      "label": "NAF + original decoder",
+      "iou": 0.8646848477112751,
+      "dice": 0.9170386414043605,
+      "precision": 0.9174157386180013,
+      "recall": 0.9374647426108519,
+      "best_epoch": 16,
+      "elapsed_minutes": 10.321950165316714,
+      "parameters": 216475161,
+      "trainable_parameters": 4325865,
+      "records": "/home/lien/WorkSpace/PolypSegmentation/experiments/local_train_naf_decoder_seed1234_20261028_010212_79638",
+      "checkpoint": "/home/lien/WorkSpace/PolypSegmentation/checkpoints/local_train_naf_decoder_seed1234_20261028_010212_79638/kvasir_best_model.pth",
+      "delta_vs_baseline_percentage_points": -0.0874875206500203,
+      "delta_vs_naf_decoder_percentage_points": 0.0,
+      "delta_vs_reference_percentage_points": -1.3915152288724975
+    },
+    {
+      "variant": "naf_replacement",
+      "label": "NAF replaces decoder",
+      "iou": 0.8616662997131547,
+      "dice": 0.9163098734493057,
+      "precision": 0.9147682457851867,
+      "recall": 0.935982995480299,
+      "best_epoch": 20,
+      "elapsed_minutes": 9.811851518050146,
+      "parameters": 216142617,
+      "trainable_parameters": 3993321,
+      "records": "/home/lien/WorkSpace/PolypSegmentation/experiments/local_train_naf_replacement_seed1234_20261028_011314_82790",
+      "checkpoint": "/home/lien/WorkSpace/PolypSegmentation/checkpoints/local_train_naf_replacement_seed1234_20261028_011314_82790/kvasir_best_model.pth",
+      "delta_vs_baseline_percentage_points": -0.3893423204620605,
+      "delta_vs_naf_decoder_percentage_points": -0.3018547998120402,
+      "delta_vs_reference_percentage_points": -1.6933700286845377
+    }
+  ],
+  "audit": {
+    "shared_initial_state": true,
+    "cpu_rng": true,
+    "inputs": true,
+    "driver_sha256": true,
+    "naf_sha256": true,
+    "config": true,
+    "model_source_sha256": true
+  },
+  "reference_iou": 0.8786,
+  "reference_lower_bound": 0.8736,
+  "original_reference_gate_passed": false,
+  "user_accepted_reference_gap": true,
+  "independent_test_set": false,
+  "note": "Single-seed, same 120-image validation set, best checkpoint chosen on that set; no statistical stability claim."
+}
