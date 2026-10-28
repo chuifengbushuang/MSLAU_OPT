@@ -263,7 +263,7 @@ def probe(runs):
 def summarize_confirmation():
     import confirm_fredft_study as confirmation
     runs = find_runs()
-    rows, checks, all_histories = [], [], {}
+    rows, checks, all_histories, artifact_checks = [], [], {}, {}
     for seed in (1234, 42, 2026):
         records = ({k: runs[k] for k in ('baseline', 'fredft_frequency', 'fredft_spatial')}
                    if seed == 1234 else {k: confirmation.completed(k, seed)
@@ -273,6 +273,23 @@ def summarize_confirmation():
         if seed != 1234:
             checks.append(confirmation.validate_seed(seed, records))
         results = {key: read(path / 'result.json') for key, path in records.items()}
+        for variant, path in records.items():
+            manifest = read(path / 'manifest.json')
+            check = dict(model_source=common.file_hash(path / 'source/networks/mslau_net.py') ==
+                         common.file_hash(runs['baseline'] / 'source/networks/mslau_net.py'),
+                         input_source=common.file_hash(path / 'source/paired_inputs.py') ==
+                         common.file_hash(runs['baseline'] / 'source/paired_inputs.py'),
+                         environment=(path / 'environment.txt').read_text() == (runs['baseline'] / 'environment.txt').read_text(),
+                         driver_snapshot=common.file_hash(path / 'driver.py') == manifest['driver_sha256'])
+            if 'core_sha256' in manifest:
+                check['core_snapshot'] = common.file_hash(path / 'source/networks/fredft_core.py') == manifest['core_sha256']
+                check['same_core_as_seed1234'] = manifest['core_sha256'] == read(runs['fredft_frequency'] / 'manifest.json')['core_sha256']
+                check['common_driver_snapshot'] = common.file_hash(path / 'common_driver.py') == manifest['common_driver_sha256']
+            for name, expected in results[variant]['checkpoints'].items():
+                check['checkpoint_' + name] = common.file_hash(ROOT / 'checkpoints' / path.name / name) == expected
+            if not all(check.values()):
+                raise RuntimeError(f'Confirmation artifact mismatch: {seed}/{variant}: {check}')
+            artifact_checks[f'{seed}/{variant}'] = check
         histories = {key: lines(path / 'epoch_metrics.jsonl') for key, path in records.items()}
         all_histories[seed] = histories
         last5 = {key: statistics.mean(x['valid']['iou'] for x in h[-5:]) for key, h in histories.items()}
@@ -296,7 +313,7 @@ def summarize_confirmation():
         aggregates[variant]['iou_sample_sd'] = statistics.stdev(r['iou'] for r in selected)
         aggregates[variant]['wins_vs_baseline'] = sum(r['delta_baseline_pp'] > 0 for r in selected)
         aggregates[variant]['wins_vs_spatial'] = sum(r['delta_spatial_pp'] > 0 for r in selected)
-    summary = dict(seeds=[1234, 42, 2026], aggregates=aggregates, runs=rows, audits=checks,
+    summary = dict(seeds=[1234, 42, 2026], aggregates=aggregates, runs=rows, audits=checks, artifact_audits=artifact_checks,
         independent_test_set=False, caveat='Three preselected seeds; descriptive paired results on the same120validation images. Not a statistical significance or independent generalization claim.')
     common.write_json(OUT / 'confirmation_summary.json', summary)
     write_csv(OUT / 'confirmation_runs.csv', rows)
