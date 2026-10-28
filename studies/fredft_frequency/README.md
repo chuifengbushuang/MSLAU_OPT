@@ -4,6 +4,12 @@ User approved 2026-10-28: smoke first, then two seed1234/20-epoch runs on the
 current RTX5070Ti. Reuse existing local BF16 baseline and NAF+original-decoder
 results. Expand only if F exceeds both baseline and S.
 
+Completed: all eight new20-epoch runs, including the triggered six-run
+confirmation. Three-seed mean IoU baseline0.867876, F0.872085, S0.870004.
+F gains0.4208pp over baseline and0.2081pp over S, with2/3 wins in both
+comparisons. See [RESULTS.md](RESULTS.md) for complete results and boundaries;
+[RESULTS_SEED1234.md](RESULTS_SEED1234.md) retains the initial comparison.
+
 ## Scientific contrast
 
 Both variants keep the original Hiera/adapters, RFBs, three UpBlocks, three heads,

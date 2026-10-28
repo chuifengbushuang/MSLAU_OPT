@@ -12,8 +12,13 @@
   F较S+0.5311个百分点。两组均4,678,755可训练参数、保留原Decoder，训练12.81/12.53分钟。
   原层初值/RNG/40条输入/环境/原循环AST/源码与三权重哈希核对全部通过；四组逐图纯推理复现原指标。
   F逐图较基线55胜65负；4px带内IoU0.597965未改善基线0.598190，收益主要在带外错误，不能宣称边缘增强。
-  条件已触发，六次多seed确认正在执行，尚不能宣称跨seed收益。监督进程状态在
-  ../analysis/20261028_fredft_study/confirmation_progress.json；禁止仅因等待而重启或重复已完成运行。
+  条件触发后的六次确认已全部完成：seed42基线/F/S=0.874653785/0.871922460/0.876673545，
+  seed2026=0.863415663/0.869156824/0.863473679。三seed均值基线0.867876390、F0.872084733、S0.870003699；
+  F对基线/S平均+0.4208/+0.2081个百分点，均2/3胜，seed42退化，不能宣称每seed稳定提高。
+  末5轮三seed均值基线0.864050795、F0.867984870、S0.866401802；F对基线三seed末5轮均改善。
+  87项九组产物/27份权重档案核对全部通过；8次新训练共93.02分钟，旧1234基线/NAF未重跑。
+  总报告studies/fredft_frequency/RESULTS.md；数据在../analysis/20261028_fredft_study/，
+  监督进程confirmation_progress.json状态completed；不得误当仍在训练而重启，不自动追加模型/seed/阈值调参。
   核心studies/fredft_frequency/fredft_core.py，入口tools/fredft_study.py，条件监督器tools/confirm_fredft_study.py，
   分析tools/analyze_fredft_study.py；所有旧实验/原训练器未改，独立local_*目录保留三份完整权重。
 
