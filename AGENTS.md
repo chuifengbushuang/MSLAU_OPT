@@ -2,6 +2,12 @@
 
 更新2026-10-27；用户最新要求优先。详细旧记录保存在Git历史，不再累积无关路线。
 
+- 最新用户要求只分析跨尺度退化、beta1负值与下一步方案，明确禁止启动新训练。
+  本轮仅对已有最佳权重做纯推理beta干预，无train/backward/optimizer/checkpoint写入，原IoU复现且内存参数恢复。
+  beta1负值给前景/背景平均logit贡献+0.30179/-0.31828，不能解释为抑制前景；翻正IoU仅+0.0536个百分点且软loss变差。
+  所有beta关掉也无法恢复旧替换版表现，固定权重干预不等于重新训练消融。报告CROSS_SCALE_SKIP_DIAGNOSIS.md。
+  提议但未实施：归一化(GN8 affine=False)+1×1通道投影(identity,bias=False)后再作零beta跨尺度相加；仅作为待验证方案。
+
 - 最新授权：在已完成的本机NAF替换版上增加三个跨尺度跳连接，beta均初始0；
   Di=NAFi(Pi,D{i+1})+beta_i*Up(D{i+1})，D4=P4，新增相加后的Di继续供下一级使用。
   保留NAF内Pi残差、RFB/三头及原NAF所有参数/正则/采样方式，无UpBlock或新增卷积；只新增3个标量。
