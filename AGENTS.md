@@ -1,6 +1,21 @@
 # P5.1 + NAF 项目约定
 
-更新2026-10-27；用户最新要求优先。详细旧记录保存在Git历史，不再累积无关路线。
+更新2026-10-28；用户最新要求优先。详细旧记录保存在Git历史，不再累积无关路线。
+
+- 2026-10-28最新授权：精读FreDFT后，用户确认先smoke，再在当前5070Ti跑seed1234的F/S各20轮，
+  F同时超过本机基线和S才补seed42/2026的本机基线/F/S，覆盖下文旧的禁止训练限制。
+  宿主为NAF+原Decoder；保留三级级联/投影/GAP+RMS/零输出残差/RFB/三UpBlock/三头，
+  仅把选择滤波核心替换为MFDA+FDFFL，取消选择器/抽样/评分正则，不加LFEM/CGMM/跨尺度直连。
+  F用同路无共轭FFT(Q)*FFT(K)响应调制异路V；S用空间Q*K及数学等价的空间FDFFL混合，参数/初值完全相同。
+  35项CPU/工作流检查和两组真实batch12 smoke通过，FDFFL等价性用FP64确认；TF32放大FFT舍入差已记录。
+  seed1234完成：F IoU0.875174915、S0.869863872；较本机基线0.865559723分别+0.9615/+0.4304个百分点，
+  F较S+0.5311个百分点。两组均4,678,755可训练参数、保留原Decoder，训练12.81/12.53分钟。
+  原层初值/RNG/40条输入/环境/原循环AST/源码与三权重哈希核对全部通过；四组逐图纯推理复现原指标。
+  F逐图较基线55胜65负；4px带内IoU0.597965未改善基线0.598190，收益主要在带外错误，不能宣称边缘增强。
+  条件已触发，六次多seed确认正在执行，尚不能宣称跨seed收益。监督进程状态在
+  ../analysis/20261028_fredft_study/confirmation_progress.json；禁止仅因等待而重启或重复已完成运行。
+  核心studies/fredft_frequency/fredft_core.py，入口tools/fredft_study.py，条件监督器tools/confirm_fredft_study.py，
+  分析tools/analyze_fredft_study.py；所有旧实验/原训练器未改，独立local_*目录保留三份完整权重。
 
 - 最新用户要求只分析跨尺度退化、beta1负值与下一步方案，明确禁止启动新训练。
   本轮仅对已有最佳权重做纯推理beta干预，无train/backward/optimizer/checkpoint写入，原IoU复现且内存参数恢复。
