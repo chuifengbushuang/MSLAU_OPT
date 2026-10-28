@@ -263,7 +263,7 @@ def probe(runs):
 def summarize_confirmation():
     import confirm_fredft_study as confirmation
     runs = find_runs()
-    rows, checks = [], []
+    rows, checks, all_histories = [], [], {}
     for seed in (1234, 42, 2026):
         records = ({k: runs[k] for k in ('baseline', 'fredft_frequency', 'fredft_spatial')}
                    if seed == 1234 else {k: confirmation.completed(k, seed)
@@ -273,9 +273,16 @@ def summarize_confirmation():
         if seed != 1234:
             checks.append(confirmation.validate_seed(seed, records))
         results = {key: read(path / 'result.json') for key, path in records.items()}
+        histories = {key: lines(path / 'epoch_metrics.jsonl') for key, path in records.items()}
+        all_histories[seed] = histories
+        last5 = {key: statistics.mean(x['valid']['iou'] for x in h[-5:]) for key, h in histories.items()}
         for variant, result in results.items():
             rows.append(dict(seed=seed, variant=variant, **result['evaluation'],
                 best_epoch=result['best_epoch'] + 1, elapsed_minutes=result['elapsed_minutes'],
+                last5_iou_mean=last5[variant],
+                last5_iou_sd=statistics.stdev(x['valid']['iou'] for x in histories[variant][-5:]),
+                last5_delta_baseline_pp=100 * (last5[variant] - last5['baseline']),
+                last5_delta_spatial_pp=100 * (last5[variant] - last5['fredft_spatial']),
                 delta_baseline_pp=100 * (result['evaluation']['iou'] - results['baseline']['evaluation']['iou']),
                 delta_spatial_pp=100 * (result['evaluation']['iou'] - results['fredft_spatial']['evaluation']['iou']),
                 records=str(records[variant])))
@@ -283,7 +290,9 @@ def summarize_confirmation():
     for variant in ('baseline', 'fredft_frequency', 'fredft_spatial'):
         selected = [r for r in rows if r['variant'] == variant]
         aggregates[variant] = {metric + '_mean': statistics.mean(r[metric] for r in selected)
-                               for metric in ('iou', 'dice', 'precision', 'recall', 'delta_baseline_pp', 'delta_spatial_pp')}
+                               for metric in ('iou', 'dice', 'precision', 'recall', 'delta_baseline_pp', 'delta_spatial_pp',
+                                              'last5_delta_baseline_pp', 'last5_delta_spatial_pp')}
+        aggregates[variant]['last5_iou_mean_over_seeds'] = statistics.mean(r['last5_iou_mean'] for r in selected)
         aggregates[variant]['iou_sample_sd'] = statistics.stdev(r['iou'] for r in selected)
         aggregates[variant]['wins_vs_baseline'] = sum(r['delta_baseline_pp'] > 0 for r in selected)
         aggregates[variant]['wins_vs_spatial'] = sum(r['delta_spatial_pp'] > 0 for r in selected)
@@ -308,6 +317,15 @@ def summarize_confirmation():
         ax.grid(alpha=.2);ax.legend(fontsize=8)
     fig.suptitle('Same-machine three-seed confirmation | BF16 |20epochs each')
     fig.savefig(FIG / 'confirmation.png', dpi=180);plt.close(fig)
+    fig, axes = plt.subplots(1, 3, figsize=(14, 4.5), constrained_layout=True)
+    for seed, ax in zip((1234, 42, 2026), axes):
+        for variant, color in zip(('baseline', 'fredft_frequency', 'fredft_spatial'), ('#475569', '#dc2626', '#2563eb')):
+            h = all_histories[seed][variant]
+            ax.plot([x['epoch'] + 1 for x in h], [x['valid']['iou'] for x in h], color=color, label=LABELS[variant])
+        ax.set_title(f'seed{seed}');ax.set_xlabel('Epoch');ax.set_xticks((1, 5, 10, 15, 20));ax.grid(alpha=.2)
+    axes[0].set_ylabel('Mean per-image validation IoU');axes[0].legend(fontsize=8)
+    fig.suptitle('All confirmation learning curves | same initialization and inputs within each seed')
+    fig.savefig(FIG / 'confirmation_curves.png', dpi=180);plt.close(fig)
     print(json.dumps(summary, indent=2), flush=True)
 
 
