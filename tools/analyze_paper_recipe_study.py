@@ -4,6 +4,7 @@ import csv
 import hashlib
 import html
 import json
+import math
 from pathlib import Path
 import statistics
 import time
@@ -35,6 +36,8 @@ def write(path,value):
 def audit_stage(records,checkpoints,result):
     history=[json.loads(line) for line in (records/'epoch_metrics.jsonl').read_text().splitlines()]
     stop=read(records/'early_stopping.json')
+    if stop['maximum_epochs']!=100 or stop['patience']!=10:
+        raise ValueError('Wrong saved stopping configuration')
     best=-float('inf');bad=0;decisions=[]
     for epoch in history:
         value=epoch['valid']['iou']
@@ -49,6 +52,9 @@ def audit_stage(records,checkpoints,result):
         raise ValueError('Epoch count mismatch')
     if abs(best-result['evaluation']['iou'])>1e-8 or not result['strict_complete_reload']:
         raise ValueError('Best model/reload mismatch')
+    last_best=max(i for i,row in enumerate(history) if row['valid']['iou']==best)+1
+    if result['best_epoch']!=last_best:
+        raise ValueError('Checkpoint epoch does not match the last maximum-IoU epoch')
     if len(result['checkpoints'])!=3 or len(list(checkpoints.glob('*.pth')))!=3:
         raise ValueError('Three checkpoint names must be retained')
     for name,digest in result['checkpoints'].items():
@@ -62,11 +68,70 @@ def audit_stage(records,checkpoints,result):
     for train,valid in zip(states[::2],states[1::2]):
         if train['model_sha256']!=valid['model_sha256']:
             raise ValueError('Validation changed model state')
+    fingerprints=[json.loads(line) for line in (records/'input_fingerprints.jsonl').read_text().splitlines()]
+    if len({row['sha256'] for row in fingerprints if row['phase']=='valid'})!=1:
+        raise ValueError('Validation inputs changed across epochs')
     per_image=read(records/'per_image.json')
     if len(per_image)!=120 or abs(statistics.mean(row['iou'] for row in per_image)-best)>1e-8:
         raise ValueError('Per-image evaluation mismatch')
+    expected_ids=(ROOT/'experiments/exp00_baseline/configs/splits/kvasir/val.txt').read_text().splitlines()
+    if [row['id'] for row in per_image]!=expected_ids:
+        raise ValueError('Reported image membership or order changed')
+    name=result['model']
+    updates={'polyper':147,'eat':110,'condseg':220,'asgnet':22}[name]
+    for index,row in enumerate(history):
+        if states[2*index]['schedule']['steps']!=updates*(index+1):
+            raise ValueError('Native batch/update count mismatch')
+        if name=='asgnet':
+            expected=[.0001*.1**((index+1)//80)]
+        elif name=='eat':
+            value=0. if index<2 else .001 if index==2 else .001/2*(1+math.cos(math.pi*(index-3)/3998))
+            expected=[value,value]
+        elif name=='condseg' and index==0:
+            expected=[.0001] if result['stage']==1 else [.00001,.0001]
+        elif name=='polyper' and index==0:
+            expected=[2e-10,2e-10]
+        else:
+            expected=row['lr_start']
+        if len(row['lr_start'])!=len(expected) or any(abs(a-b)>1e-12 for a,b in zip(row['lr_start'],expected)):
+            raise ValueError('Native learning-rate trajectory mismatch')
     return dict(stage=result['stage'],epochs=len(history),best_epoch=result['best_epoch'],iou=best,
-        checkpoints_verified=3,validation_pure=True)
+        checkpoints_verified=3,validation_pure=True,validation_ids_verified=120,native_update_count_verified=True)
+
+
+def audit_baseline(reference):
+    records=Path(reference['path']);result=read(records/'result.json')
+    config=read(records/'effective_config.json');stop=read(records/'early_stopping.json')
+    if config['model']!='baseline' or config['epochs']!=100 or config['precision']!='bf16' or stop['patience']!=10:
+        raise ValueError('Reused baseline is not the unchanged100/patience10 baseline')
+    if result['seed']!=reference['seed'] or result['status']!='completed' or result['evaluation']!=reference['evaluation']:
+        raise ValueError('Baseline summary differs from authoritative completed run')
+    history=[json.loads(line) for line in (records/'epoch_metrics.jsonl').read_text().splitlines()]
+    best=-float('inf');bad=0
+    for index,row in enumerate(history):
+        value=row['valid']['iou']
+        if value>best:
+            best,bad=value,0
+        else:
+            bad+=1
+        if bad>=10 and index!=len(history)-1:
+            raise ValueError('Baseline continued past patience')
+    if len(history)>100 or (len(history)<100 and bad<10) or len(history)!=reference['completed_epochs']:
+        raise ValueError('Baseline stopping trajectory mismatch')
+    if abs(best-result['evaluation']['iou'])>1e-6 or result['best_epoch']+1!=reference['best_epoch']:
+        raise ValueError('Baseline best epoch/evaluation mismatch')
+    directory=WORKSPACE/'work/paper_models_20261030/runs/checkpoints'/records.name
+    if result['checkpoints']!=reference['checkpoint_sha256']:
+        raise ValueError('Baseline checkpoint manifest mismatch')
+    for name,digest in result['checkpoints'].items():
+        if file_hash(directory/name)!=digest:
+            raise ValueError('Reused baseline checkpoint changed')
+    expected=ROOT/'experiments/exp00_baseline/configs/splits/kvasir'
+    for name in ('train','val','test'):
+        if file_hash(records/f'source/configs/splits/kvasir/{name}.txt')!=file_hash(expected/f'{name}.txt'):
+            raise ValueError('Baseline split differs from original frozen lists')
+    return dict(seed=result['seed'],epochs=len(history),best_epoch=reference['best_epoch'],
+        evaluation=result['evaluation'],checkpoints_verified=3,stopping_trajectory_verified=True)
 
 
 def collect():
@@ -99,11 +164,11 @@ def collect():
             if model=='condseg':
                 entry['stage1_epochs']=result['stages'][0]['completed_epochs']
             rows.append(entry);completed.append(entry);audits.append(dict(model=model,seed=seed,stages=stage_audits))
-    for baseline in scope['baseline_reference']:
-        directory=WORKSPACE/'work/paper_models_20261030/runs/checkpoints'/Path(baseline['path']).name
-        for name,digest in baseline['checkpoint_sha256'].items():
-            if file_hash(directory/name)!=digest:
-                raise ValueError('Reused baseline checkpoint changed')
+    baseline_audits=[audit_baseline(baseline) for baseline in scope['baseline_reference']]
+    original=ROOT/'experiments/exp00_baseline'
+    frozen=read(original/'source_manifest.json')['files']
+    if any(file_hash(original/name)!=digest for name,digest in frozen.items()):
+        raise ValueError('A frozen original file changed')
     summary=[]
     for model in ('baseline',*MODELS):
         selected=[row for row in rows if row['model']==model]
@@ -120,7 +185,8 @@ def collect():
     with (OUT/'comparison.csv').open('w') as stream:
         writer=csv.DictWriter(stream,fieldnames=list(summary[0]));writer.writeheader();writer.writerows(summary)
     write(OUT/'audit.json',dict(status='passed' if not pending else 'partial',completed_paper_runs=len(completed),
-        reused_baseline_runs=3,audits=audits,pending=pending))
+        reused_baseline_runs=3,baseline_audits=baseline_audits,frozen_originals_verified=len(frozen),
+        report_code_sha256=file_hash(__file__),audits=audits,pending=pending))
     return report
 
 
@@ -151,6 +217,14 @@ def render(report):
         differences.append([esc(model),esc(p.get('author_training','')),esc(p.get('our_changes','')),esc(p.get('paper_vs_code',p.get('hyperparameters_verified','')))])
     document+=table(['方法','作者实验','本机约束','来源及实现差异'],differences)
     document+='<p>精度：作者方法使用发布脚本中的 FP32；原基线保持原 BF16。ASGNet 保留全局 batch40，以单卡 4×10 累计，并保留作者 DataParallel 的首副本 BN 状态；ConDSeg 阶段一采用经数值核对的等价低显存计算顺序。数学兼容性改动、EAT 原生无效浅层分支等均记录于配方和运行源码。</p>'
+    document+='<p>训练掩码也按方法公开代码处理：ConDSeg／EAT 保留灰度软标签，ASGNet 保留其掩码增强和边缘监督，Polyper 使用二值类别标签。原基线按灰度值&gt;0二值化。所有方法的验证标签均与原基线完全一致：原始非零二值化、最近邻缩放到352；这些差异记录在协议中。</p>'
+    document+='<h2>指标口径与来源</h2><ul>'
+    for model in MODELS:
+        p=report['protocols'][model]
+        link=p.get('paper_url',p.get('source',''))
+        text=esc(p.get('evaluation_difference',''))
+        document+='<li>'+esc(model)+'：'+text+' <a href="'+html.escape(link,quote=True)+'">原始来源</a></li>'
+    document+='</ul>'
     document+='<h2>逐种子结果</h2>'
     document+=table(['方法','seed','IoU','Dice','最佳轮','分割阶段轮数','预训练阶段轮数'],[
         [esc(r['model']),str(r['seed']),f"{r['evaluation']['iou']*100:.3f}",f"{r['evaluation']['dice']*100:.3f}",
