@@ -1,0 +1,61 @@
+{
+  "status": "authorized",
+  "date_local": "2026-10-29",
+  "supersedes": "CVC-only training_plan.json and kvasir_clinicdb_preserved_v1 joint split",
+  "dataset_view": "datasets/Polyp-Mixed-v1",
+  "split_directory": "MSLAU_OPT/configs/splits/kvasir_clinicdb_holdout_v1",
+  "counts": {"train": 1253, "validation": 194, "test": 165},
+  "by_source": {
+    "train": {"Kvasir-SEG": 800, "CVC-ClinicDB": 453},
+    "validation": {"Kvasir-SEG": 120, "CVC-ClinicDB": 74},
+    "test": {"Kvasir-SEG": 80, "CVC-ClinicDB": 85}
+  },
+  "split_policy": "保留原Kvasir验证120张和CVC全部划分；random.Random(20261029)从原Kvasir训练880张仅一次抽80张作为新运行测试，不按模型表现挑图。原始数据与清单不改。",
+  "storage": "沿用4个目录软链接，不复制、缩放或重写数据。完整ID包含来源目录。",
+  "preprocessing": "原读取器RGB、skimage灰度mask>0后最近邻缩放；图像双线性缩放352x352、ImageNet归一化；训练原增强+paired_aug_v2，验证/测试无随机增强。不增加分来源处理。",
+  "arms": ["baseline", "exp03_independent", "freqselect_h"],
+  "arm_definitions": {
+    "baseline": "最新exp00_baseline_paired_strict_v2，无NAF，原Decoder。",
+    "exp03_independent": "exp03_naf_p12_paired_strict_v2原模型；P1/P2独立软NAF，原预算/alpha/temperature和训练正则0.001不改。",
+    "freqselect_h": "复用已有三级融合外壳、核心恒等的H；无频率选择/频率处理、无正则，原Decoder。与实验三不是等参数机制消融。"
+  },
+  "seeds": [1234, 42, 2026],
+  "order": "先B/实验三/H各一次seed1234真实六步smoke；正式按seed1234、42、2026，每seed依次B/实验三/H。",
+  "formal_runs": 9,
+  "epochs_per_run": 20,
+  "recipe": {
+    "initialization": "每次官方Hiera-Large safetensors重新初始化，不使用历史Kvasir权重或smoke权重。",
+    "image_size": 352,
+    "batch": 12,
+    "validation_test_batch": 6,
+    "workers": 2,
+    "cpu_threads": 4,
+    "precision": "BF16、NAF核心FP32、评估FP32 sigmoid>0.5",
+    "strict_cuda": true,
+    "optimizer": "原AdamW两组lr0.001、weight_decay0.0005",
+    "scheduler": "原CosineAnnealingLR T_max20/eta_min0、原更新位置",
+    "loss": "原Structure主+D2+D3，权重各1；boundary0；实验三仅训练加原正则0.001",
+    "train_drop_last": true,
+    "train_steps_per_epoch": 104,
+    "train_samples_per_epoch": 1248,
+    "dropped_samples_per_epoch": 5,
+    "optimizer_steps_per_run": 2080
+  },
+  "selection": "按全部194张验证图的逐图IoU算术平均选最佳权重，沿用原>=平分取后轮规则；不做两个来源各50%加权，不用测试选权重。",
+  "testing": "九次训练全部完成且最佳权重冻结后，严格重载各最佳IoU模型，统一评估165张测试图；主结果为逐图平均IoU/Dice，同时附两个来源结果和同seed配对差、三seed均值/样本SD。",
+  "metrics": "原compute_batch_metrics，IoU/Dice smooth=1，固定352网格；验证末5/10轮均值可直接从原epoch日志读取。",
+  "audit": "共享完整原层初值及初始全RNG；同seed跨模型40条train/valid输入指纹；每次40条模型/缓冲/AdamW/scheduler/RNG阶段摘要；三份完整最佳权重、源码和数据划分快照。",
+  "stop_rule": "失败保留日志并停止，不自动重试、不挑seed、不增轮数/模块或按测试调参；不重复旧Kvasir实验。",
+  "limitations": [
+    "新Kvasir80仅对本次从官方初始化的新模型留出；历史Kvasir开发已经使用这些图像，不是全新外部测试。",
+    "CVC测试仅4个本地序列；本地29序列编号来源未独立核实，与部分文献31序列表述不同；无患者级隔离保证。",
+    "已检查完全重复图像；没有可靠Kvasir病例/序列元数据，不保证无近重复或患者关联。",
+    "CVC138张mask含中间灰度；沿用原>0口径，不擅自校正标签。",
+    "混合20轮2080次更新多于旧Kvasir20轮1460次；只以新训练的匹配基线比较模块，不把跨实验差异单独归因于新增数据。"
+  ],
+  "implementation": "复用local_decoder_study训练/损失/优化器循环及现有模型构造；仅增加可选划分路径与小型研究入口，自动监督及最终评估共用一个文件。",
+  "output": {
+    "runs_checkpoints": "work/joint_polyp_holdout_20261029/{experiments,checkpoints}",
+    "progress_summary": "analysis/20261029_joint_polyp_holdout"
+  }
+}

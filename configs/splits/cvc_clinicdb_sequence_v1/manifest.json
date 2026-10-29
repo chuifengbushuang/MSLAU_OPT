@@ -1,0 +1,100 @@
+{
+  "schema_version": 1,
+  "dataset": "CVC-ClinicDB",
+  "protocol": "clinicdb_sequence_v1",
+  "dataset_root": "/home/lien/WorkSpace/PolypSegmentation/datasets/CVC-ClinicDB",
+  "metadata_sha256": "2f55a7b8a30bd2afe7739f453599fa7fccdfa0672890f23ad2c62e2180d5aceb",
+  "generator_sha256": "fb2753a11832c6c3247f342a69d07a0394e95a89902aa601f9e08c1b500debe4",
+  "split_seed": 20261029,
+  "method": "random.Random(seed).shuffle(sorted(sequence_ids)); first 21 train, next 4 val, final 4 test",
+  "split_selection": "single predeclared draw; no reroll/foreground balancing/model scores",
+  "grouping_source": "local metadata.csv sequence_id; 29 groups; provenance not independently verified",
+  "grouping_limitation": "Literature often reports 31 sequences/23 patients. No patient IDs locally; patient isolation is not established.",
+  "summaries": {
+    "train": {
+      "images": 453,
+      "sequences": 21,
+      "sequence_ids": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        7,
+        9,
+        11,
+        13,
+        14,
+        16,
+        17,
+        19,
+        20,
+        22,
+        23,
+        24,
+        25,
+        26,
+        27,
+        29
+      ],
+      "small_masks_lt5pct_gt0": 169,
+      "mean_foreground_fraction_gt0": 0.09648640701010752
+    },
+    "val": {
+      "images": 74,
+      "sequences": 4,
+      "sequence_ids": [
+        6,
+        10,
+        12,
+        28
+      ],
+      "small_masks_lt5pct_gt0": 18,
+      "mean_foreground_fraction_gt0": 0.10799349153841341
+    },
+    "test": {
+      "images": 85,
+      "sequences": 4,
+      "sequence_ids": [
+        8,
+        15,
+        18,
+        21
+      ],
+      "small_masks_lt5pct_gt0": 42,
+      "mean_foreground_fraction_gt0": 0.06137546381399782
+    }
+  },
+  "image_count": 612,
+  "image_size_wh": [
+    384,
+    288
+  ],
+  "storage": "images/*.png and masks/*.png; pixel-identical to PNG/Original and PNG/Ground Truth",
+  "unused_storage": "TIF is not used or validated; metadata tif_* paths say TIFF/, local folder is TIF/.",
+  "checks": {
+    "all_pngs_decoded": true,
+    "png_copies_pixel_identical": true,
+    "image_ids_disjoint": true,
+    "sequence_ids_disjoint": true,
+    "coverage_612": true,
+    "exact_decoded_image_duplicates": 0,
+    "mask_channels_identical": true
+  },
+  "mask_audit": {
+    "intermediate_value_masks": 138,
+    "low_gray_masks": 138,
+    "total_low_gray_pixels": 91011,
+    "mean_gt0_vs_gt127_iou": 0.9931231142264548,
+    "min_gt0_vs_gt127_iou": 0.694563783363215,
+    "training_threshold": "original loader: skimage as_gray then >0, before nearest-neighbor resize",
+    "diagnostic_threshold": "uint8 >127 only for annotation sensitivity; no files changed"
+  },
+  "files_sha256": {
+    "train.txt": "639142fdc36ff4efe179e973e4f219356c6bc4b87a28af1589080039446a73cd",
+    "val.txt": "7ecefcd4aeedc6db7bf7c16fe936a2077b032821a23c80b363e73ef820186ec0",
+    "test.txt": "755f5203b98db94b4e9a5a72f53817d2cfc085a4f8d062afbd8b96b153e17e80",
+    "samples.csv": "014de2253b2ac2ae7ab98dd4bc4488eee38d4f0dde0b18f391a4982593f70c8b",
+    "sequences.csv": "67d77a5f5d8bbf0dd7ec4434c9f6efc34ce9116d1527b96dc5cb33575915b236"
+  }
+}

@@ -1,0 +1,71 @@
+{
+  "protocol": "kvasir_clinicdb_holdout_v1",
+  "roots_relative_to_workspace": {
+    "dataset_view": "datasets/Polyp-Mixed-v1",
+    "split_directory": "MSLAU_OPT/configs/splits/kvasir_clinicdb_holdout_v1"
+  },
+  "data_storage": "Four relative directory symlinks; no images/masks copied, renamed, resized or rewritten.",
+  "links": {
+    "images/Kvasir-SEG": "../../Kvasir-SEG/images",
+    "images/CVC-ClinicDB": "../../CVC-ClinicDB/images",
+    "masks/Kvasir-SEG": "../../Kvasir-SEG/masks",
+    "masks/CVC-ClinicDB": "../../CVC-ClinicDB/masks"
+  },
+  "counts": {
+    "train": 1253,
+    "val": 194,
+    "test": 165
+  },
+  "counts_by_source": {
+    "train": {
+      "Kvasir-SEG": 800,
+      "CVC-ClinicDB": 453
+    },
+    "val": {
+      "Kvasir-SEG": 120,
+      "CVC-ClinicDB": 74
+    },
+    "test": {
+      "Kvasir-SEG": 80,
+      "CVC-ClinicDB": 85
+    }
+  },
+  "kvasir_holdout": {
+    "seed": 20261029,
+    "count": 80,
+    "method": "random.Random(seed).sample(original_train_list,80), one draw; no model scores",
+    "limitation": "Held out only for fresh runs. Historical Kvasir models trained on these images; no patient grouping available."
+  },
+  "ordering": "Original relative list order within each subset; Kvasir then CVC; CVC membership unchanged.",
+  "sample_id": "dataset/original_filename; input augmentation and frequency-selection keys use this complete ID.",
+  "old_kvasir_test": "Original mirrored test.txt remains unchanged, excluded from joint independent test.",
+  "validation_selection": "Arithmetic mean of all 194 per-image IoUs, not equal weighting of dataset means.",
+  "test_limitations": "165-image internal holdout; Kvasir80+CVC85. CVC has 4 local sequence IDs; no external/patient-level generalization claim.",
+  "group_limitations": "Literature often reports 31 sequences/23 patients. No patient IDs locally; patient isolation is not established.",
+  "original_split_files_sha256": {
+    "experiments/exp00_baseline/configs/splits/kvasir/train.txt": "1f35939a3883e07adc87fb57416b60adb4a3205cbf88975b8ba8e59b27caa89e",
+    "experiments/exp00_baseline/configs/splits/kvasir/val.txt": "d44d1076cf2820e72f6c05beeb8767cf55ba6a03ecefd5dd8752e7588ff767e2",
+    "experiments/exp00_baseline/configs/splits/kvasir/test.txt": "d44d1076cf2820e72f6c05beeb8767cf55ba6a03ecefd5dd8752e7588ff767e2",
+    "configs/splits/cvc_clinicdb_sequence_v1/train.txt": "639142fdc36ff4efe179e973e4f219356c6bc4b87a28af1589080039446a73cd",
+    "configs/splits/cvc_clinicdb_sequence_v1/val.txt": "7ecefcd4aeedc6db7bf7c16fe936a2077b032821a23c80b363e73ef820186ec0",
+    "configs/splits/cvc_clinicdb_sequence_v1/test.txt": "755f5203b98db94b4e9a5a72f53817d2cfc085a4f8d062afbd8b96b153e17e80",
+    "configs/splits/cvc_clinicdb_sequence_v1/manifest.json": "16684e4b1fe5a5dac9a76125acb0176768efafbb87cbc105873d6d7e797bc2a4",
+    "configs/splits/cvc_clinicdb_sequence_v1/samples.csv": "014de2253b2ac2ae7ab98dd4bc4488eee38d4f0dde0b18f391a4982593f70c8b"
+  },
+  "files_sha256": {
+    "train.txt": "8793f3691b88189f9450c37e3b3f456fe10b934d2e13337049b39ba9086a51e2",
+    "val.txt": "efd22a82e9b7f7fcaca855fec7411702bc897b0d9d5636a766573b8b36ecae6d",
+    "test.txt": "ea79248dfc89f8b3f3c35d091f1897355aaf9350112c549847321a405bad4235",
+    "samples.csv": "b7aa4ded8dd2df54ff585fe22679647611edeaf5f5c0afcde16fb2209708ac00"
+  },
+  "generator_sha256": "12a03f70b2a6e1fda69b3148e254a1143acc04033f2d2601feac8695f0529e83",
+  "exact_decoded_duplicate_groups": [],
+  "checks": {
+    "cvc_membership_and_kvasir_validation_preserved": true,
+    "all_1612_pairs_decoded": true,
+    "source_split_bytes_unchanged": true,
+    "joint_ids_disjoint": true,
+    "cvc_sequences_disjoint": true,
+    "no_exact_decoded_duplicates_across_splits": true
+  }
+}

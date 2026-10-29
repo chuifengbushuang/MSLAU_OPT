@@ -1,0 +1,25 @@
+{
+  "frozen_14_files": true,
+  "original_training_loss_optimizer_smoke_autocast_ast_unchanged": true,
+  "workflow_tests_passed": 25,
+  "exp03_integration_tests_passed": 4,
+  "decoder_tests_passed": 4,
+  "all_1612_pairs_read_by_original_reader": true,
+  "both_sources_352_transform_and_binary_mask_checks": true,
+  "workers_0_vs_2_inputs_identical_normal_permissions": true,
+  "splits_reproduced_exactly": true,
+  "frozen_split_overwrite_refused": true,
+  "all_source_data_hashes_and_symlinks_verified": true,
+  "counts": {
+    "train": 1253,
+    "val": 194,
+    "test": 165
+  },
+  "gpu_training_not_yet_started": true,
+  "implementation_sha256": {
+    "tools/local_decoder_study.py": "4c25da198ef3aea984ab6292ea8665f29ab41f42c5d4c3c7b21e24fd813aa792",
+    "tools/joint_polyp_study.py": "698faade46872bc2394c442b6780fbdb4c2550c322be99f234e73f2c0a004e7c",
+    "tools/prepare_joint_polyp_dataset.py": "12a03f70b2a6e1fda69b3148e254a1143acc04033f2d2601feac8695f0529e83",
+    "studies/clinicdb/joint_training_plan.json": "ad6f97a3112ffe9ccf4651514358d6de0e2ee31bea1178f5176886cef6c44b89"
+  }
+}

@@ -390,11 +390,12 @@ def train(model, loaders, paired, factories, args, records, checkpoints):
     return result
 
 
-def main():
+def main(argv=None, study=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--mode', choices=('smoke', 'train'), required=True)
-    parser.add_argument('--variant', choices=VARIANTS, required=True)
+    parser.add_argument('--variant', choices=VARIANTS if study is None else study.VARIANTS, required=True)
     parser.add_argument('--dataset', type=Path, default=WORKSPACE / 'datasets/Kvasir-SEG')
+    parser.add_argument('--split-dir', type=Path)
     parser.add_argument('--hiera-checkpoint', type=Path, default=WORKSPACE / 'checkpoints/sam2_hiera_large.fb_r1024.safetensors')
     parser.add_argument('--output-root', type=Path, default=WORKSPACE)
     parser.add_argument('--seed', type=int, default=1234)
@@ -405,7 +406,7 @@ def main():
     parser.add_argument('--epochs', type=int, default=20)
     parser.add_argument('--steps', type=int, default=6)
     parser.add_argument('--strict', action=argparse.BooleanOptionalAction, default=True)
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     if args.steps < 4 or min(args.batch, args.threads, args.epochs) < 1 or args.workers < 0:
         parser.error('Invalid batch/threads/epochs/workers; smoke requires at least four steps')
     tag = datetime.datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y%m%d_%H%M%S')
@@ -433,7 +434,8 @@ def main():
         torch.backends.cudnn.benchmark = False
         torch.use_deterministic_algorithms(args.strict, warn_only=False)
         source = records / 'source'
-        manifest = build('exp00_baseline_paired_strict_v2', source)
+        experiment = 'exp00_baseline_paired_strict_v2' if study is None else study.EXPERIMENTS[args.variant]
+        manifest = build(experiment, source)
         shutil.copy2(NAF_FILE, source / 'networks/naf_discrete.py')
         if args.variant == 'naf_replacement_skip':
             shutil.copy2(SKIP_FILE, source / 'networks/naf_cross_scale_skip.py')
@@ -452,7 +454,8 @@ def main():
         factories.update(definitions(source / 'kvasir_test.py', {'compute_batch_metrics'}, dict(torch=torch)))
         loaders = {}
         for phase, split in (('train', 'train'), ('valid', 'val')):
-            ids = factories['load_ids'](str(source / f'configs/splits/kvasir/{split}.txt'))
+            split_root = args.split_dir if args.split_dir is not None else source / 'configs/splits/kvasir'
+            ids = factories['load_ids'](str(split_root / f'{split}.txt'))
             missing = [str(args.dataset / sub / sample) for sample in ids for sub in ('images', 'masks')
                        if not (args.dataset / sub / sample).is_file()]
             if missing:
@@ -464,7 +467,11 @@ def main():
         checkpoint_hash = file_hash(args.hiera_checkpoint)
         if checkpoint_hash != '7694579e76566289f25f63799024a2fe83144005c75ece6c09458254aa3ee13c':
             raise RuntimeError('Unexpected Hiera checkpoint hash')
-        model = make_model(source, args)
+        if study is not None:
+            study.configure(args, records, source)
+        model = make_model(source, args) if study is None else study.make_model(source, args)
+        if study is not None:
+            study.record_initial(model, paired, records, args)
         shared = {name: value for name, value in model.state_dict().items()
                   if '.frequency_enhancer.' not in name and not any(f'.up{i}.' in name for i in (1, 2, 3))}
         write_json(records / 'initial_state.json', dict(shared_state_sha256=paired.state_digest(shared),
@@ -491,7 +498,13 @@ def main():
             evaluation_probability_dtype='float32', evaluation_threshold=.5,
             evaluation_comparator='>', training_drop_last=True))
         (records / 'environment.txt').write_text(subprocess.check_output([sys.executable, '-m', 'pip', 'freeze'], text=True))
+        if args.split_dir is not None:
+            config = json.loads((records / 'effective_config.json').read_text())
+            config['split_directory'] = str(args.split_dir.resolve())
+            write_json(records / 'effective_config.json', config)
         model.cuda()
+        if study is not None:
+            study.before_execution(model, loaders, args, records)
         if args.mode == 'smoke':
             smoke(model, loaders, factories, args, records)
         else:
