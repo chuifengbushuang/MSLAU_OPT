@@ -4,6 +4,7 @@ import datetime
 import hashlib
 import inspect
 import json
+import math
 import os
 from pathlib import Path
 import random
@@ -108,9 +109,20 @@ def check_gradients(report,variant):
         return False
     unexpected=[name for name in report['missing'] if not intentional(name)]
     if unexpected:raise RuntimeError(f'Unexpected disconnected model parameters: {unexpected}')
-    if variant=='eat' and (not report['deformable'] or any(v is None or v<=0
-            for values in report['deformable'].values() for v in values.values())):
-        raise RuntimeError(f'DCNv4 coordinates or masks cannot learn: {report["deformable"]}')
+    if variant=='eat':
+        expected={f'network.apm{i}.apu.conv' for i in (2,3,4)}|{'network.dfconv.conv'}
+        if set(report['deformable'])!=expected:
+            raise RuntimeError('Missing or unexpected author DCNv4 modules')
+        for name,values in report['deformable'].items():
+            # The released shallow DFConv initializes all unnormalized masks and
+            # biases to zero, then applies BN + ReLU. Its exact zero output has
+            # zero ReLU derivative, so this native branch remains inactive. The
+            # independent author-class/oracle test verifies this and a GELU
+            # positive control; retain the architecture rather than repair it.
+            shallow=name=='network.dfconv.conv'
+            if any(v is None or not math.isfinite(v) or v<0 or (v==0 and not shallow)
+                   for v in values.values()):
+                raise RuntimeError(f'DCNv4 gradient gate failed: {name}: {values}')
 
 
 def fixed_losses(outputs,labels,criterion,variant,training):

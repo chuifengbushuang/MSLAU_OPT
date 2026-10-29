@@ -22,13 +22,13 @@
   "loss": "Frozen baseline StructureLoss_binary; main + aux_d2 + aux_d3, each weight 1; boundary weight 0",
   "implementation_adaptations": {
     "polyper": "Pinned author's Swin and decoder; vectorized spatial indexing and query chunks of 256 preserve the attention equation and original no_grad branch. CPU-double outputs and gradients checked against author's implementation.",
-    "eat": "Pinned author's DCNv4 projections and network. DCNv4 sampling implemented with deterministic autograd gather, checked against independent grid_sample forward/backward and finite differences, including GPU repeatability.",
+    "eat": "Pinned author's DCNv4 projections and network. DCNv4 sampling implemented with deterministic autograd gather, checked against independent grid_sample forward/backward and finite differences, including GPU repeatability. Native shallow DFConv stays inactive: zero unnormalized masks and zero biases feed BN/ReLU with zero derivative. Confirmed using the original DFConv class with both sampling backends and a GELU positive control; architecture and initialization retained. All three APM deformable coordinate/mask gradients must be nonzero.",
     "condseg": "Global adaptive max pool replaced by equivalent deterministic flatten/max with first-maximum tie gradient. Activation checkpointing preserves BatchNorm buffers and RNG; observed six-step losses equal the uncheckpointed smoke.",
     "asgnet": "Pinned author's PVTv2-B3 network; FFT input explicitly FP32 under BF16, equivalent global max pooling for strict CUDA. No native edge loss is added."
   },
   "head_mapping": {
     "polyper": "Native final segmentation supplied to all three baseline loss slots (3*Structure); no invented auxiliary heads",
-    "eat": "Native final segmentation supplied to all three baseline loss slots (3*Structure); no invented auxiliary heads",
+    "eat": "Native final segmentation supplied to all three baseline loss slots (3*Structure); released zero-initialized BN/ReLU shallow DFConv remains inactive, as verified with an independent sampling oracle",
     "condseg": "Native final mask logit, native foreground auxiliary logit, negative native background auxiliary logit; uncertainty mask head has no dedicated loss under the fixed baseline recipe",
     "asgnet": "Native final f1, f2 and f3 segmentation logits; native boundary outputs receive no added boundary loss"
   },

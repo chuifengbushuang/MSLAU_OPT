@@ -10,6 +10,7 @@ import types
 import contextlib
 import io
 import os
+import ast
 
 import torch
 from torch.nn import functional as F
@@ -49,6 +50,48 @@ def grid_oracle(value, offset_mask, kh, kw, sh, sw, ph, pw, dh, dw, g, d, scale,
 
 
 class DCNv4Tests(unittest.TestCase):
+    def test_native_shallow_relu_is_inactive_with_both_sampling_backends(self):
+        import adapters
+        from dcnv4_reference import DCNv4Function
+        base=adapters.ASSETS/'vendor/eat'
+        source=ast.parse((base/'src/eat_model/eat.py').read_text())
+        definition=next(node for node in source.body if isinstance(node,ast.ClassDef) and node.name=='DFConv')
+        def oracle_apply(value,offset,*args):
+            return grid_oracle(value,offset,*args[:11],args[12])
+        for backend in (DCNv4Function,types.SimpleNamespace(apply=oracle_apply)):
+            dcn=adapters.source_module('native_dcn_shallow_test',base/'DCNv4_op/DCNv4/modules/dcnv4.py',
+                dict(DCNv4Function=backend),remove_imports=('functions',))
+            namespace=dict(torch=torch,nn=torch.nn,Tensor=torch.Tensor,DCNv4=dcn.DCNv4)
+            exec(compile(ast.Module(body=[definition],type_ignores=[]),'<pinned native DFConv>','exec'),namespace)
+            torch.manual_seed(64)
+            layer=namespace['DFConv'](64,32,3,padding=1,offset_scale=1.)
+            original={k:v.clone() for k,v in layer.named_parameters()}
+            optimizer=torch.optim.AdamW(layer.parameters(),lr=.001,weight_decay=.0005)
+            for _ in range(6):
+                optimizer.zero_grad(set_to_none=True)
+                out=layer(torch.randn(2,64,5,5))
+                self.assertEqual(out.count_nonzero().item(),0)
+                (out-torch.randn_like(out)).square().mean().backward()
+                for p in layer.parameters():
+                    self.assertIsNotNone(p.grad)
+                    self.assertEqual(p.grad.count_nonzero().item(),0)
+                optimizer.step()
+            # AdamW may decay nonzero weights, but zero masks/BN biases remain
+            # exactly zero. Changing only ReLU to GELU enables mask gradients.
+            self.assertEqual(layer.conv.offset_mask.weight.count_nonzero().item(),0)
+            self.assertEqual(layer.conv.offset_mask.bias.count_nonzero().item(),0)
+            layer.load_state_dict({**layer.state_dict(),**original})
+            layer.act=torch.nn.GELU()
+            optimizer.zero_grad(set_to_none=True)
+            out=layer(torch.randn(2,64,5,5))
+            (out-torch.randn_like(out)).square().mean().backward()
+            k=layer.conv.kernel_size**2
+            gradient=layer.conv.offset_mask.weight.grad[:layer.conv.group*3*k].reshape(layer.conv.group,3*k,-1)
+            self.assertGreater(gradient[:,2*k:].abs().max().item(),0)
+            # Zero initial masks still imply zero coordinate gradient on the
+            # first step; nonzero mask updates open that path on later steps.
+            self.assertEqual(gradient[:,:2*k].count_nonzero().item(),0)
+
     def test_forward_and_both_gradients_against_independent_grid_sampler(self):
         torch.manual_seed(82)
         for stride, dilation, scale, remove in [(1,1,1.,0), (2,1,2.5,0), (1,2,.7,1)]:
