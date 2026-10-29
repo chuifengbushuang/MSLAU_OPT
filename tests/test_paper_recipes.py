@@ -5,9 +5,11 @@ import math
 import os
 os.environ.setdefault('NO_ALBUMENTATIONS_UPDATE','1')
 import random
+import tempfile
 from pathlib import Path
 import sys
 import unittest
+from unittest.mock import patch
 
 import cv2
 import numpy as np
@@ -255,6 +257,36 @@ class RecipesTest(unittest.TestCase):
         rows=driver.metric_rows(probability,mask,['a','b','c']);expected=official((probability>.5).float(),mask)
         for key in ('iou','dice','accuracy','precision','recall','f1'):
             self.assertEqual([row[key] for row in rows],expected[key])
+
+    def test_queue_aggregation_partial_complete_and_mismatched_metadata(self):
+        import run_paper_recipe_study as queue
+        with tempfile.TemporaryDirectory() as temporary:
+            out=Path(temporary)/'analysis';output=Path(temporary)/'runs';out.mkdir()
+            scope={'baseline_reference':[dict(seed=seed,path=f'baseline{seed}',evaluation=dict(iou=.87,dice=.92))
+                for seed in driver.SEEDS],'fixed':{'maximum_epochs':100},'deferred':{'l2s':'wait for official code'}}
+            driver.write(out/'scope.json',scope)
+            def completed(model,seed):
+                path=output/'experiments'/f'native_train_{model}_seed{seed}_fixture'
+                driver.write(path/'result.json',dict(model=model,seed=seed,status='completed',evaluation=dict(iou=.7,dice=.78)))
+                return path
+            with patch.object(driver,'OUT',out),patch.object(driver,'OUTPUT',output):
+                first=completed('polyper',1234)
+                partial=queue.aggregate()
+                self.assertEqual(partial['status'],'running')
+                self.assertEqual(len(partial['runs']),4)
+                self.assertEqual(partial['runs'][-1]['model'],'polyper')
+                self.assertEqual(partial['runs'][-1]['seed'],1234)
+                for model in driver.MODELS:
+                    for seed in driver.SEEDS:
+                        completed(model,seed)
+                full=queue.aggregate()
+                self.assertEqual(full['status'],'completed')
+                self.assertEqual(len(full['runs']),15)
+                self.assertTrue(all(row['seeds']==3 for row in full['summary']))
+                wrong=driver.read(first/'result.json');wrong['seed']=42
+                driver.write(first/'result.json',wrong)
+                with self.assertRaisesRegex(ValueError,'metadata differs'):
+                    queue.aggregate()
 
 
 if __name__=='__main__':

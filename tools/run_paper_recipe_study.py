@@ -57,7 +57,10 @@ def aggregate():
         for seed in study.SEEDS:
             path=find('train',model,seed)
             if path:
-                completed.append(dict(model=model,seed=seed,records=str(path),**study.read(path/'result.json')))
+                result=study.read(path/'result.json')
+                if result.get('model')!=model or result.get('seed')!=seed or result.get('status')!='completed':
+                    raise ValueError(f'Completed run metadata differs from its queue slot: {path}')
+                completed.append(dict(result,records=str(path)))
     rows=[dict(model='baseline',seed=item['seed'],records=item['path'],evaluation=item['evaluation'])
           for item in scope['baseline_reference']]+completed
     reported={'baseline':(None,None),'polyper':(.9036,.9482),'eat':(.9785,.9709),
