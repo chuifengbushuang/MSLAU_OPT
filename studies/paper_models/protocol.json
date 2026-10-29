@@ -1,0 +1,42 @@
+{
+  "version": "kvasir_paper_models_v1",
+  "models": ["polyper", "eat", "condseg", "asgnet"],
+  "deferred": {"l2s": "User requested waiting for official implementation; repository contains only README.md."},
+  "seeds": [1234, 42, 2026],
+  "epochs": 100,
+  "early_stopping": {"patience": 10, "monitor": "validation foreground per-image IoU", "mode": "max", "min_delta": 0.0, "ties_reset_patience": false},
+  "baseline": "Rerun the original baseline under the same 100-epoch cap and patience=10; retain old 20-epoch results as history",
+  "image_size": 352,
+  "batch_size": 12,
+  "validation_batch_size": 6,
+  "workers": 2,
+  "threads": 4,
+  "precision": "bf16",
+  "strict_cuda": true,
+  "input_protocol": "paired_aug_v2",
+  "split": "Original frozen Kvasir 880 training / 120 validation; test.txt equals val.txt",
+  "checkpoint_selection": "Maximum per-image foreground IoU on the same 120 images; >= tie chooses later epoch",
+  "evaluation": "352x352, sigmoid in FP32, threshold >0.5, foreground per-image average, smoothing=1",
+  "optimizer": {"name": "AdamW", "encoder_lr": 0.001, "decoder_lr": 0.001, "weight_decay": 0.0005},
+  "scheduler": "CosineAnnealingLR(T_max=100, eta_min=0); step after training before validation",
+  "loss": "Frozen baseline StructureLoss_binary; main + aux_d2 + aux_d3, each weight 1; boundary weight 0",
+  "implementation_adaptations": {
+    "polyper": "Pinned author's Swin and decoder; vectorized spatial indexing and query chunks of 256 preserve the attention equation and original no_grad branch. CPU-double outputs and gradients checked against author's implementation.",
+    "eat": "Pinned author's DCNv4 projections and network. DCNv4 sampling implemented with deterministic autograd gather, checked against independent grid_sample forward/backward and finite differences, including GPU repeatability.",
+    "condseg": "Global adaptive max pool replaced by equivalent deterministic flatten/max with first-maximum tie gradient. Activation checkpointing preserves BatchNorm buffers and RNG; observed six-step losses equal the uncheckpointed smoke.",
+    "asgnet": "Pinned author's PVTv2-B3 network; FFT input explicitly FP32 under BF16, equivalent global max pooling for strict CUDA. No native edge loss is added."
+  },
+  "head_mapping": {
+    "polyper": "Native final segmentation supplied to all three baseline loss slots (3*Structure); no invented auxiliary heads",
+    "eat": "Native final segmentation supplied to all three baseline loss slots (3*Structure); no invented auxiliary heads",
+    "condseg": "Native final mask logit, native foreground auxiliary logit, negative native background auxiliary logit; uncertainty mask head has no dedicated loss under the fixed baseline recipe",
+    "asgnet": "Native final f1, f2 and f3 segmentation logits; native boundary outputs receive no added boundary loss"
+  },
+  "reported": {
+    "polyper": {"iou": 90.36, "dice": 94.82, "source": "https://ojs.aaai.org/index.php/AAAI/article/view/28274", "protocol": "900 Kvasir + 550 ClinicDB training; Kvasir test 100; 224 crops, 80k iterations; released evaluator uses accumulated class statistics and default sigmoid threshold 0.3; table-generation settings not fully established"},
+    "eat": {"iou": 97.85, "dice": 97.09, "source": "https://github.com/deepang-ai/EAT/blob/c699f7e5e5f457d7fd5789f1e309e380048142f8/figures/table1.png", "protocol": "README 80/10/10; released loader 80/20; Kvasir mIoU greater than Dice needs clarification; not a validated comparable target"},
+    "condseg": {"iou": 84.60, "dice": 90.50, "source": "https://arxiv.org/pdf/2412.08345", "protocol": "Kvasir 880/120 (matching image membership not established), 256 input, consistency pretraining then task-specific training; this controlled study does not add their training strategy or losses"},
+    "asgnet": {"iou": 87.00, "dice": 92.10, "source": "https://arxiv.org/abs/2604.14755", "protocol": "900 Kvasir + 550 ClinicDB training; Kvasir test 100; PVTv2-B3, native multi-output and edge training"},
+    "l2s": {"iou": 87.02, "dice": 91.87, "source": "https://openaccess.thecvf.com/content/CVPR2025/papers/Guo_Take_the_Bull_by_the_Horns_Learning_to_Segment_Hard_CVPR_2025_paper.pdf", "protocol": "Five-fold cross validation, 448 input; deferred by user until official code is published"}
+  }
+}

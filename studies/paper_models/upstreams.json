@@ -1,0 +1,7 @@
+{
+  "polyper": {"repo": "haoshao-nku/medical_seg", "commit": "9a18e129f6f7db3018b509677ef426c67a616e0b", "weights": "weights/swin_tiny.pth", "weight_sha256": "3f89aee6e380026163f9f709ed14fc1726e0f8e2578d1f2d12bb465bbc8ae237"},
+  "eat": {"repo": "deepang-ai/EAT", "commit": "c699f7e5e5f457d7fd5789f1e309e380048142f8", "weights": "vendor/eat/pretrained/pvt_v2_b2.pth", "weight_sha256": "80711cd1b37ffba12bec6c7a2a7c54efe2315ed635e6d2055fd51c3e909ede4d"},
+  "condseg": {"repo": "Mengqi-Lei/ConDSeg", "commit": "b4c22c399e72ec858026abc0e87143f3c53fe12d", "weights": "weights/resnet50_author.pth", "weight_sha256": "19c8e3572231adff6824a2da93fd67b5986919a2e65f8b6007eab4edee220097"},
+  "asgnet": {"repo": "CSYSI/ASGNet", "commit": "97c4e746e94bb6a184a14775b771226eed88c3e2", "weights": "weights/pvt_v2_b3.pth", "weight_sha256": "48b51a06db85a1fec0520028592561ffc29ea4e975f2a7f5b7acacbfca03f143"},
+  "l2s": {"repo": "TqlYuanGie/L2S", "commit": "0a7d56b6082ddcec7f468c7766b89d62b53b0eb6", "files": ["README.md"], "status": "deferred_by_user_until_official_code"}
+}
