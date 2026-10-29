@@ -33,6 +33,45 @@ def write(path,value):
     tmp=Path(str(path)+'.tmp');tmp.write_text(json.dumps(value,ensure_ascii=False,indent=2)+'\n');tmp.replace(path)
 
 
+def aggregation_metrics(rows):
+    """Recover exact integer counts from the saved FP32 per-image metrics.
+
+    With352² pixels, rounding recall*GT and accuracy*N uniquely recovers the
+    integer counts (FP32 error is far below half a pixel). Independently check
+    the resulting IoU, Dice and precision before reporting any alternative.
+    These use the already-selected checkpoint and its existing0.5 threshold.
+    """
+    if not rows:
+        raise ValueError('No per-image metrics')
+    pixels=352*352;totals=dict(tp=0,fp=0,fn=0,tn=0)
+    for row in rows:
+        gt=int(row['foreground_pixels'])
+        if gt!=row['foreground_pixels'] or not 0<=gt<=pixels:
+            raise ValueError('Invalid foreground count')
+        if any(not math.isfinite(row[key]) for key in ('iou','dice','accuracy','precision','recall')):
+            raise ValueError('Nonfinite saved metric')
+        tp=round(row['recall']*gt);correct=round(row['accuracy']*pixels)
+        predicted=pixels+2*tp-gt-correct
+        fp,fn=predicted-tp,gt-tp;tn=pixels-tp-fp-fn
+        if min(tp,fp,fn,tn)<0 or not 0<=predicted<=pixels:
+            raise ValueError('Saved metrics do not yield valid integer counts')
+        checks=dict(iou=(tp+1)/(tp+fp+fn+1),dice=(2*tp+1)/(2*tp+fp+fn+1),
+            precision=tp/predicted if predicted else 0.,recall=tp/gt if gt else 0.)
+        if any(abs(value-row[key])>1e-7 for key,value in checks.items()):
+            raise ValueError('Recovered counts disagree with independent saved metrics')
+        for key,value in dict(tp=tp,fp=fp,fn=fn,tn=tn).items():
+            totals[key]+=value
+    tp,fp,fn,tn=(totals[key] for key in ('tp','fp','fn','tn'))
+    foreground=tp/(tp+fp+fn) if tp+fp+fn else None
+    background=tn/(tn+fp+fn) if tn+fp+fn else None
+    defined=[value for value in (foreground,background) if value is not None]
+    return dict(images=len(rows),threshold=.5,primary_smoothing=1,global_smoothing=0,
+        foreground_image_mean_iou_percent=statistics.mean(row['iou'] for row in rows)*100,
+        foreground_global_iou_percent=foreground*100 if foreground is not None else None,
+        background_global_iou_percent=background*100 if background is not None else None,
+        global_class_mean_iou_percent=statistics.mean(defined)*100,confusion_counts=totals)
+
+
 def audit_stage(records,checkpoints,result):
     history=[json.loads(line) for line in (records/'epoch_metrics.jsonl').read_text().splitlines()]
     stop=read(records/'early_stopping.json')
@@ -96,7 +135,8 @@ def audit_stage(records,checkpoints,result):
         if len(row['lr_start'])!=len(expected) or any(abs(a-b)>1e-12 for a,b in zip(row['lr_start'],expected)):
             raise ValueError('Native learning-rate trajectory mismatch')
     return dict(stage=result['stage'],epochs=len(history),best_epoch=result['best_epoch'],iou=best,
-        checkpoints_verified=3,validation_pure=True,validation_ids_verified=120,native_update_count_verified=True)
+        checkpoints_verified=3,validation_pure=True,validation_ids_verified=120,native_update_count_verified=True,
+        metric_aggregation=aggregation_metrics(per_image))
 
 
 def audit_baseline(reference):
@@ -166,7 +206,8 @@ def collect():
                 if transfer['source_sha256']!=file_hash(stage1) or transfer['tensors']<1:
                     raise ValueError('Stage1 best encoder was not transferred')
             entry=dict(model=model,seed=seed,evaluation=result['evaluation'],records=str(path),
-                completed_epochs=result['stages'][-1]['completed_epochs'],best_epoch=result['stages'][-1]['best_epoch'])
+                completed_epochs=result['stages'][-1]['completed_epochs'],best_epoch=result['stages'][-1]['best_epoch'],
+                metric_aggregation=stage_audits[-1]['metric_aggregation'])
             if model=='condseg':
                 entry['stage1_epochs']=result['stages'][0]['completed_epochs']
             rows.append(entry);completed.append(entry);audits.append(dict(model=model,seed=seed,stages=stage_audits))
@@ -237,8 +278,18 @@ def render(report):
         source='<a href="'+html.escape(link,quote=True)+'">原始来源</a>'
         if p.get('paper_url') and p['paper_url']!=link:
             source+=' · <a href="'+html.escape(p['paper_url'],quote=True)+'">论文文本</a>'
+        code=p.get('code_url',p.get('source'))
+        if code and code!=link:
+            source+=' · <a href="'+html.escape(code,quote=True)+'">官方代码</a>'
+        if p.get('reported_metrics_url'):
+            source+=' · <a href="'+html.escape(p['reported_metrics_url'],quote=True)+'">作者指标表</a>'
         document+='<li>'+esc(model)+'：'+text+' '+source+'</li>'
     document+='</ul>'
+    document+='<h2>同一预测的 IoU 口径对照</h2><p>以下补充计算使用已选定的同一权重和已保存预测指标，阈值均为0.5。主指标按前景逐图平均、smooth=1；补充指标先全局累计整数混淆计数、不加平滑，再计算前景 IoU 或前景/背景类别平均。它们也未完整复现作者的阈值、图像尺寸等设置。此处只展示有逐图明细的已完成论文模型。</p>'
+    document+=table(['方法','seed','前景逐图 IoU（主指标）','全局前景 IoU','全局前景/背景类别平均 IoU'],[
+        [esc(row['model']),str(row['seed']),number(row['metric_aggregation']['foreground_image_mean_iou_percent']),
+         number(row['metric_aggregation']['foreground_global_iou_percent']),number(row['metric_aggregation']['global_class_mean_iou_percent'])]
+        for row in report['runs'] if 'metric_aggregation' in row])
     document+='<h2>逐种子结果</h2>'
     document+=table(['方法','seed','IoU','Dice','最佳轮','分割阶段轮数','预训练阶段轮数'],[
         [esc(r['model']),str(r['seed']),f"{r['evaluation']['iou']*100:.3f}",f"{r['evaluation']['dice']*100:.3f}",
