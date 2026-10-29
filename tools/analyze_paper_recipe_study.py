@@ -170,7 +170,7 @@ def collect():
     if any(file_hash(original/name)!=digest for name,digest in frozen.items()):
         raise ValueError('A frozen original file changed')
     summary=[]
-    for model in ('baseline',*MODELS):
+    for model in ('baseline',*MODELS,'l2s'):
         selected=[row for row in rows if row['model']==model]
         entry=dict(model=model,seeds=len(selected),author_iou_percent=protocols.get(model,{}).get('reported_iou_percent'),
             author_dice_percent=protocols.get(model,{}).get('reported_dice_percent'))
@@ -197,10 +197,12 @@ def render(report):
             '<tr>'+''.join('<td>'+str(cell)+'</td>' for cell in row)+'</tr>' for row in rows)+'</tbody></table>'
     def metric(row,name):
         mean,sd=row[name+'_mean_percent'],row[name+'_sd_percent']
+        if row['model']=='l2s':
+            return '等待官方代码'
         return '待完成' if mean is None else f'{mean:.2f}'+(f' ± {sd:.2f}' if sd is not None else '')
     def number(value):
         return '—' if value is None else f'{value:.2f}'
-    rows=[[esc(row['model']),str(row['seeds'])+'/3',metric(row,'iou'),metric(row,'dice'),
+    rows=[[esc(row['model']),'暂缓' if row['model']=='l2s' else str(row['seeds'])+'/3',metric(row,'iou'),metric(row,'dice'),
         number(row['author_iou_percent'])+(' †' if row['model']=='eat' else ''),number(row['author_dice_percent'])]
         for row in report['summary']]
     document='''<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>论文配方重跑对比</title>
@@ -212,14 +214,14 @@ def render(report):
     document+='<p>† EAT 数值来自作者公开表，IoU 大于 Dice 与同口径二值分割关系不符，尚未澄清，不能当作核实的 SOTA。EAT 论文全文未获得；用户已同意采用官方代码超参数并明确标注。</p>'
     document+='<h2>配方与作者协议的差异</h2>'
     differences=[]
-    for model in MODELS:
+    for model in (*MODELS,'l2s'):
         p=report['protocols'][model]
         differences.append([esc(model),esc(p.get('author_training','')),esc(p.get('our_changes','')),esc(p.get('paper_vs_code',p.get('hyperparameters_verified','')))])
     document+=table(['方法','作者实验','本机约束','来源及实现差异'],differences)
     document+='<p>精度：作者方法使用发布脚本中的 FP32；原基线保持原 BF16。ASGNet 保留全局 batch40，以单卡 4×10 累计，并保留作者 DataParallel 的首副本 BN 状态；ConDSeg 阶段一采用经数值核对的等价低显存计算顺序。数学兼容性改动、EAT 原生无效浅层分支等均记录于配方和运行源码。</p>'
     document+='<p>训练掩码也按方法公开代码处理：ConDSeg／EAT 保留灰度软标签，ASGNet 保留其掩码增强和边缘监督，Polyper 使用二值类别标签。原基线按灰度值&gt;0二值化。所有方法的验证标签均与原基线完全一致：原始非零二值化、最近邻缩放到352；这些差异记录在协议中。</p>'
     document+='<h2>指标口径与来源</h2><ul>'
-    for model in MODELS:
+    for model in (*MODELS,'l2s'):
         p=report['protocols'][model]
         link=p.get('paper_url',p.get('source',''))
         text=esc(p.get('evaluation_difference',''))
