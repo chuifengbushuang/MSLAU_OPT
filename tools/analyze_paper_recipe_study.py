@@ -227,6 +227,7 @@ def render(report):
         differences.append([esc(model),esc(p.get('author_training','')),esc(p.get('our_changes','')),esc(p.get('paper_vs_code',p.get('hyperparameters_verified','')))])
     document+=table(['方法','作者实验','本机约束','来源及实现差异'],differences)
     document+='<p>精度：作者方法使用发布脚本中的 FP32；原基线保持原 BF16。ASGNet 保留全局 batch40，以单卡 4×10 累计，并保留作者 DataParallel 的首副本 BN 状态；ConDSeg 阶段一采用经数值核对的等价低显存计算顺序。数学兼容性改动、EAT 原生无效浅层分支等均记录于配方和运行源码。</p>'
+    document+='<p>预训练骨干沿用各自来源：原基线为官方 SAM2 Hiera-L，Polyper 为 Swin-T，EAT 为 PVTv2-B2，ConDSeg 为 ResNet-50，ASGNet 为 PVTv2-B3。原基线冻结 Hiera 主干，训练其适配器和解码器；作者方法按各自策略更新骨干。预训练来源和可训练参数范围存在差异；该比较不单独隔离这些因素的作用。</p>'
     document+='<p>训练掩码也按方法公开代码处理：ConDSeg／EAT 保留灰度软标签，ASGNet 保留其掩码增强和边缘监督，Polyper 使用二值类别标签。原基线按灰度值&gt;0二值化。所有方法的验证标签均与原基线完全一致：原始非零二值化、最近邻缩放到352；这些差异记录在协议中。</p>'
     document+='<h2>指标口径与来源</h2><ul>'
     for model in (*MODELS,'l2s'):
