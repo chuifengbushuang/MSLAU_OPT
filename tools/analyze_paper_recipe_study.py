@@ -179,7 +179,9 @@ def collect():
     for model in ('baseline',*MODELS,'l2s'):
         selected=[row for row in rows if row['model']==model]
         entry=dict(model=model,seeds=len(selected),author_iou_percent=protocols.get(model,{}).get('reported_iou_percent'),
-            author_dice_percent=protocols.get(model,{}).get('reported_dice_percent'))
+            author_dice_percent=protocols.get(model,{}).get('reported_dice_percent'),
+            venue=protocols.get(model,{}).get('venue','用户原始基线'),
+            protocol_difference=protocols.get(model,{}).get('our_changes','原始基线配方，100轮上限/早停10轮'))
         for metric in ('iou','dice'):
             values=[row['evaluation'][metric]*100 for row in selected]
             entry[metric+'_mean_percent']=statistics.mean(values) if values else None
@@ -208,7 +210,7 @@ def render(report):
         return '待完成' if mean is None else f'{mean:.2f}'+(f' ± {sd:.2f}' if sd is not None else '')
     def number(value):
         return '—' if value is None else f'{value:.2f}'
-    rows=[[esc(row['model']),'暂缓' if row['model']=='l2s' else str(row['seeds'])+'/3',metric(row,'iou'),metric(row,'dice'),
+    rows=[[esc(row['model']),esc(row['venue']),'暂缓' if row['model']=='l2s' else str(row['seeds'])+'/3',metric(row,'iou'),metric(row,'dice'),
         number(row['author_iou_percent'])+(' †' if row['model']=='eat' else ''),number(row['author_dice_percent'])]
         for row in report['summary']]
     document='''<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>论文配方重跑对比</title>
@@ -216,7 +218,7 @@ def render(report):
 <h1>论文原生训练配方 · Kvasir 对比</h1>'''
     document+='<p>状态：'+esc(report['status'])+'。固定 seeds：1234 / 42 / 2026。指标单位：%，± 为种子间样本标准差。</p>'
     document+='<p class="note">统一 Kvasir 880 训练 / 120 验证与报告、352×352 输入；每阶段最多 100 轮，各自早停 10 轮。验证与测试为同一清单，结果不是独立测试。四种方法恢复各自论文／官方代码训练配方；基线复用已完成的三个相同早停规则运行。</p>'
-    document+=table(['方法','已完成 seeds','本机 IoU','本机 Dice','作者 IoU','作者 Dice'],rows)
+    document+=table(['方法','发表来源','已完成 seeds','本机 IoU','本机 Dice','作者 IoU','作者 Dice'],rows)
     document+='<p>† EAT 数值来自作者公开表，IoU 大于 Dice 与同口径二值分割关系不符，尚未澄清，不能当作核实的 SOTA。EAT 论文全文未获得；用户已同意采用官方代码超参数并明确标注。</p>'
     document+='<h2>配方与作者协议的差异</h2>'
     differences=[]
@@ -229,9 +231,12 @@ def render(report):
     document+='<h2>指标口径与来源</h2><ul>'
     for model in (*MODELS,'l2s'):
         p=report['protocols'][model]
-        link=p.get('paper_url',p.get('source',''))
+        link=p.get('publisher_url',p.get('paper_url',p.get('source','')))
         text=esc(p.get('evaluation_difference',''))
-        document+='<li>'+esc(model)+'：'+text+' <a href="'+html.escape(link,quote=True)+'">原始来源</a></li>'
+        source='<a href="'+html.escape(link,quote=True)+'">原始来源</a>'
+        if p.get('paper_url') and p['paper_url']!=link:
+            source+=' · <a href="'+html.escape(p['paper_url'],quote=True)+'">论文文本</a>'
+        document+='<li>'+esc(model)+'：'+text+' '+source+'</li>'
     document+='</ul>'
     document+='<h2>逐种子结果</h2>'
     document+=table(['方法','seed','IoU','Dice','最佳轮','分割阶段轮数','预训练阶段轮数'],[
