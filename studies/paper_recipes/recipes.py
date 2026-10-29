@@ -211,6 +211,15 @@ class Schedule:
     def state_dict(self):
         state = ([item.state_dict() for item in self.native] if isinstance(self.native,list)
                  else self.native.state_dict() if self.native else None)
+        if self.name == 'condseg':
+            # ReduceLROnPlateau stores intentional +/-inf sentinels even after
+            # its first observation. Encode these in the LOG snapshot only;
+            # never mutate or round the scheduler's actual numeric state.
+            state = dict(state)
+            for key in ('best','mode_worse'):
+                value=state[key]
+                if math.isinf(value):
+                    state[key]='Infinity' if value>0 else '-Infinity'
         return dict(name=self.name,steps=self.steps,native=state)
 
 

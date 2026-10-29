@@ -1,5 +1,6 @@
 """Native recipes: upstream numeric oracles, stage transfer, DP4 and data isolation."""
 import copy
+import json
 import math
 import os
 os.environ.setdefault('NO_ALBUMENTATIONS_UPDATE','1')
@@ -92,6 +93,23 @@ class RecipesTest(unittest.TestCase):
         loss=criterion(x,y);loss.backward()
         self.assertTrue(torch.isfinite(loss));self.assertGreater(x.grad.abs().max().item(),0)
         self.assertEqual(criterion.dice.smooth_nr,0);self.assertEqual(criterion.dice.smooth_dr,1e-5)
+
+    def test_condseg_scheduler_logging_is_json_safe_without_mutating_training(self):
+        model=Tiny();opt=r.optimizer(model,'condseg',2);schedule=r.Schedule(opt,'condseg')
+        reference_opt=r.optimizer(copy.deepcopy(model),'condseg',2)
+        reference=torch.optim.lr_scheduler.ReduceLROnPlateau(reference_opt,mode='min',patience=30)
+        for epoch in range(40):
+            before=copy.deepcopy(schedule.native.state_dict())
+            snapshot=schedule.state_dict()
+            json.dumps(snapshot,allow_nan=False)
+            self.assertEqual(schedule.native.state_dict(),before)
+            self.assertEqual(snapshot['native']['mode_worse'],'Infinity')
+            if epoch==0:
+                self.assertEqual(snapshot['native']['best'],'Infinity')
+            schedule.after_epoch(epoch,1.)
+            reference.step(1.)
+            self.assertEqual([g['lr'] for g in opt.param_groups],[g['lr'] for g in reference_opt.param_groups])
+            self.assertEqual(schedule.native.state_dict(),reference.state_dict())
 
     def test_condseg_consistency_against_author_class(self):
         namespace=r.definitions(r.ASSETS/'vendor/condseg/utils/run_engine_stage1.py',{'BinaryConsistencyLoss'},dict(torch=torch,nn=nn,F=F))

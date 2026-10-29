@@ -140,6 +140,7 @@ def collect():
         completed_epochs=r['completed_epochs'],best_epoch=r['best_epoch']) for r in scope['baseline_reference']]
     completed=[];audits=[];pending=[]
     gate=read(OUT/'gate.json') if (OUT/'gate.json').exists() else None
+    qualified=read(OUT/'historical_qualified_runs.json') if (OUT/'historical_qualified_runs.json').exists() else {}
     for model in MODELS:
         for seed in SEEDS:
             candidates=list((RUNS/'experiments').glob(f'native_train_{model}_seed{seed}_*'))
@@ -148,7 +149,12 @@ def collect():
             if not candidates or not (candidates[0]/'result.json').exists():
                 pending.append(dict(model=model,seed=seed));continue
             path=candidates[0];config=read(path/'config.json');result=read(path/'result.json')
-            if gate is None or config['source_signature']!=gate['signature'] or config['precision']!='fp32':
+            selected_gate=gate
+            if gate is not None and config['source_signature']!=gate['signature'] and path.name in qualified:
+                # Only this exact already-started run may retain its fully
+                # qualified earlier source when a later logging-only fix lands.
+                selected_gate=read(OUT/qualified[path.name]['gate'])
+            if selected_gate is None or selected_gate['status']!='passed' or config['source_signature']!=selected_gate['signature'] or config['precision']!='fp32':
                 raise ValueError('Formal source or precision differs from native preflight')
             stage_audits=[]
             for stage in result['stages']:
