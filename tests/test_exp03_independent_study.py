@@ -19,6 +19,23 @@ class IndependentStudyTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):torch.set_num_threads(2)
 
+    def test_input_audit_allows_only_the_known_initial_hash_logging_assignment(self):
+        from run_exp03_independent_study import paired_source_compatible
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);current=root/'current';baseline=root/'baseline'
+            common.build(driver.EXPERIMENT,current)
+            common.build('exp00_baseline_paired_strict_v2',baseline)
+            a,b=current/'paired_inputs.py',baseline/'paired_inputs.py'
+            self.assertNotEqual(a.read_bytes(),b.read_bytes())
+            self.assertTrue(paired_source_compatible(a,b))
+            altered=root/'altered.py'
+            altered.write_text(a.read_text().replace('paired_aug_v2','paired_aug_v3'))
+            self.assertFalse(paired_source_compatible(altered,b))
+            altered.write_text(a.read_text()+"\ndef new_input_behavior():\n    return 1\n")
+            self.assertFalse(paired_source_compatible(altered,b))
+            altered.write_text(a.read_text().replace("record['baseline_state_sha256']", "record['other_hash']"))
+            self.assertFalse(paired_source_compatible(altered,b))
+
     def test_factory_isolates_cached_baseline_imports_and_restores_modules(self):
         prior={n:sys.modules[n] for n in list(sys.modules) if n=='networks' or n.startswith('networks.')}
         sentinel=types.ModuleType('networks')

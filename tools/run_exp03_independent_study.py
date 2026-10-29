@@ -1,5 +1,6 @@
 """Smoke, then unmodified experiment3 seed1234/42/2026, twenty epochs each."""
 import argparse
+import ast
 import fcntl
 import json
 import os
@@ -38,6 +39,25 @@ def locate(mode, variant, seed):
 
 def reference_records(seed, variant):
     return driver.comparison_records(seed)[variant]
+
+
+def paired_source_compatible(current, baseline):
+    """Only the known, unused initial-state logging addition may differ.
+
+    Every other AST node, including all input algorithms and constants, must
+    match. The current driver records its own hashes and never calls this
+    historical record_initial_state function.
+    """
+    allowed = ast.parse("record['baseline_state_sha256'] = state_digest({"
+        "name: value for name, value in model.state_dict().items() "
+        "if not name.startswith('progressive_decoder.frequency_enhancer.')})").body[0]
+    def normalized(path):
+        tree = ast.parse(Path(path).read_text())
+        for node in tree.body:
+            if isinstance(node, ast.FunctionDef) and node.name == 'record_initial_state':
+                node.body = [stmt for stmt in node.body if ast.dump(stmt) != ast.dump(allowed)]
+        return ast.dump(tree)
+    return normalized(current) == normalized(baseline)
 
 
 def validate_references():
@@ -80,7 +100,7 @@ def validate(path, mode, seed):
         driver=common.file_hash(path/'driver.py')==manifest['driver_sha256'],
         common=common.file_hash(path/'common_driver.py')==manifest['common_driver_sha256'],
         model=common.file_hash(path/'source/networks/mslau_net.py')==manifest['model_source_sha256'],
-        paired_source=common.file_hash(path/'source/paired_inputs.py')==common.file_hash(baseline/'source/paired_inputs.py'),
+        paired_source=paired_source_compatible(path/'source/paired_inputs.py',baseline/'source/paired_inputs.py'),
         environment=(path/'environment.txt').read_bytes()==(baseline/'environment.txt').read_bytes(),
         shared_initial=initial['shared_state_sha256']==prior['shared_state_sha256'],
         cpu_rng=initial['cpu_rng_sha256']==prior['cpu_rng_sha256'],
