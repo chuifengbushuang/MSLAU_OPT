@@ -7,16 +7,16 @@ case "${1:-}" in
     STUDY_PYTHON="${OFFICIAL_PYTHON:-/home/le/miniconda3/envs/mslau-p51/bin/python}"
     STUDY_DATASET="${OFFICIAL_DATASET:-/data/dataset/zsy/mslau-net/Kvasir-SEG}"
     STUDY_HIERA="${OFFICIAL_HIERA:-/data/models/zsy/mslau-net/pretrained/sam2_hiera_large.fb_r1024.safetensors}"
-    STUDY_OUTPUT="${OFFICIAL_OUTPUT:-/data/models/le/mslau-net/official_kvasir_880_120_fp32}"
-    STUDY_RUN_NAME="${OFFICIAL_RUN_NAME:-rtx3090_v1}"
+    STUDY_OUTPUT="${OFFICIAL_OUTPUT:-/data/models/le/mslau-net/official_kvasir_880_120_original20}"
+    STUDY_RUN_NAME="${OFFICIAL_RUN_NAME:-rtx3090_original20_v1}"
     ;;
   5070ti)
     STUDY_WORKSPACE="$(dirname -- "$STUDY_REPOSITORY")"
     STUDY_PYTHON="${OFFICIAL_PYTHON:-$STUDY_WORKSPACE/work/local_train_env/bin/python}"
     STUDY_DATASET="${OFFICIAL_DATASET:-$STUDY_WORKSPACE/datasets/Kvasir-SEG}"
     STUDY_HIERA="${OFFICIAL_HIERA:-$STUDY_WORKSPACE/checkpoints/sam2_hiera_large.fb_r1024.safetensors}"
-    STUDY_OUTPUT="${OFFICIAL_OUTPUT:-$STUDY_WORKSPACE/work/official_kvasir_880_120_fp32}"
-    STUDY_RUN_NAME="${OFFICIAL_RUN_NAME:-rtx5070ti_v1}"
+    STUDY_OUTPUT="${OFFICIAL_OUTPUT:-$STUDY_WORKSPACE/work/official_kvasir_880_120_original20}"
+    STUDY_RUN_NAME="${OFFICIAL_RUN_NAME:-rtx5070ti_original20_v1}"
     ;;
   *)
     printf '%s\n' 'Usage: bash tools/run_official_kvasir.sh {3090|5070ti} [--run] [additional Python options]'
@@ -34,7 +34,7 @@ for STUDY_SEED in 1234 42 2026; do
       exp00_baseline_paired_strict_v2 exp03_naf_p12_paired_strict_v2 exp09_naf_discrete_paired_strict_v2; do
     "$STUDY_PYTHON" -u "$STUDY_REPOSITORY/tools/run_experiment.py" "$STUDY_EXPERIMENT" \
       --split-dir "$STUDY_REPOSITORY/configs/splits/kvasir_medico_official_880_120_v1" \
-      --epochs 100 --patience 10 --fp32 --seed "$STUDY_SEED" --gpu "${OFFICIAL_GPU:-0}" \
+      --seed "$STUDY_SEED" --gpu "${OFFICIAL_GPU:-0}" \
       --dataset "$STUDY_DATASET" --hiera-checkpoint "$STUDY_HIERA" "$@"
   done
 done
