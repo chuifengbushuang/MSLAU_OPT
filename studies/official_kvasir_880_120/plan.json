@@ -1,0 +1,27 @@
+{
+  "authorized_on": "2026-10-30",
+  "status": "confirmed",
+  "split_protocol": "kvasir_medico_official_880_120_v1",
+  "seeds": [1234, 42, 2026],
+  "experiments": [
+    {"label": "0 original baseline", "source": "exp00_baseline"},
+    {"label": "3 original independent NAF", "source": "exp03_naf_p12"},
+    {"label": "9 original cascade fusion NAF", "source": "exp09_naf_discrete"},
+    {"label": "latest strict-v2 baseline", "source": "exp00_baseline_paired_strict_v2"},
+    {"label": "3.1 current batch: strict-v2 independent NAF", "source": "exp03_naf_p12_paired_strict_v2"},
+    {"label": "9.1 current batch: strict-v2 cascade fusion NAF", "source": "exp09_naf_discrete_paired_strict_v2"}
+  ],
+  "formal_runs_per_machine": 18,
+  "new_paper_model_runs": 0,
+  "precision": {"parameters_and_inputs": "float32", "AMP": false, "TF32": false},
+  "budget": {"maximum_epochs": 100, "early_stopping_patience": 10, "monitor": "validation IoU", "minimum_delta": 0, "ties": "no improvement"},
+  "unchanged": {"image_size": 352, "batch": 12, "training_workers": 8, "validation_batch": 6, "standalone_eval_batch": 8, "encoder_lr": 0.001, "decoder_lr": 0.001, "optimizer": "AdamW", "weight_decay": 0.0005, "scheduler": "original CosineAnnealingLR, T_max follows maximum epoch100", "loss": "original Structure loss and original auxiliary weights", "model_and_NAF": "original per-experiment architecture, sampling, regularizers and initialization"},
+  "input_and_numerical_protocols": "Original0/3 retain their original protocols, original9 retains paired-v1/non-strict, latest baseline and its NAF controls all use paired-v2/strict CUDA.",
+  "initialization": "Fresh official SAM2 Hiera weights for every formal run; never continue a previously trained Kvasir model or a smoke model.",
+  "artifacts": "Independent output directory for each GPU, model and seed; retain three original checkpoint filenames, source snapshots, effective commands, environment, runtime and per-image evaluation.",
+  "evaluation_scope": "The official120 are used for early stopping/checkpoint selection and reporting; no separate independent third test set.",
+  "rtx5070ti_scheduling": "Wait for the already-authorized official Polyper80k, old paper-recipe queue and final audit to complete and their recorded processes to exit. Do not signal or edit those tasks. Then perform six preflight runs and eighteen formal runs.",
+  "rtx3090_scheduling": "Provide command and preparation archive; user starts it on the3090 server. The command first runs six preflights, then eighteen formal runs.",
+  "history": "Preserve all original splits, experiment definitions, results and checkpoints.",
+  "failure_policy": "Stop on failure, changed queued sources or existing output; do not automatically lower precision, reduce batch, change models or repeat failed runs."
+}

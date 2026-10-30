@@ -1,0 +1,23 @@
+{
+  "protocol": "kvasir_medico_official_880_120_v1",
+  "repository": "https://github.com/DebeshJha/2020-MediaEval-Medico-polyp-segmentation",
+  "commit": "d594c08b7f3a1cc40ef878284b5fc29de822bf18",
+  "upstream_path": "kvasir-seg-train-val",
+  "format": "Original upstream IDs, order retained, no extension; original loader adds .jpg",
+  "files": {
+    "train.txt": {
+      "count": 880,
+      "sha256": "49992c7c6c80abf02032050d4ae754236da3ba1041f609659ad0043ff6d1795c"
+    },
+    "val.txt": {
+      "count": 120,
+      "sha256": "d9b48bd3d980324edb39df97764fdbb5489b2583f088fb49c659b76f6d20876b"
+    },
+    "test.txt": {
+      "count": 120,
+      "sha256": "d9b48bd3d980324edb39df97764fdbb5489b2583f088fb49c659b76f6d20876b"
+    }
+  },
+  "evaluation": "val and test are the SAME120 images; selected validation result, no independent third test set",
+  "historical_splits": "Frozen historical split and all existing results unchanged"
+}
