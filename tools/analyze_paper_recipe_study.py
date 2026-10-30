@@ -256,9 +256,9 @@ def render(report):
         for row in report['summary']]
     document='''<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>论文配方重跑对比</title>
 <style>body{font:16px/1.65 system-ui,sans-serif;max-width:1200px;margin:40px auto;padding:0 24px;color:#182635;background:#f7f9fc}table{width:100%;border-collapse:collapse;background:white;margin:18px 0}td,th{text-align:left;border:1px solid #dbe3ec;padding:10px;vertical-align:top}th{background:#e8eff7}h1{font-size:28px}h2{font-size:21px;margin-top:32px}.note{background:#fff4dc;padding:15px;border-left:4px solid #db9f25}a{color:#1267b5}</style>
-<h1>论文原生训练配方 · Kvasir 对比</h1>'''
+<h1>论文参数优先 · Kvasir 协议适配对比</h1>'''
     document+='<p>状态：'+esc(report['status'])+'。固定 seeds：1234 / 42 / 2026。指标单位：%，± 为种子间样本标准差。</p>'
-    document+='<p class="note">统一 Kvasir 880 训练 / 120 验证与报告、352×352 输入；每阶段最多 100 轮，各自早停 10 轮。验证与测试为同一清单，结果不是独立测试。四种方法恢复各自论文／官方代码训练配方；基线复用已完成的三个相同早停规则运行。</p>'
+    document+='<p class="note">统一 Kvasir 880 训练 / 120 验证与报告、352×352 输入；每阶段最多 100 轮，各自早停 10 轮。验证与测试为同一清单，结果不是独立测试。四种方法按论文参数优先、未报告细节参考官方代码进行适配；这是统一约束下的实验，不是作者原始协议的完整复现。基线复用已完成的三个相同早停规则运行。</p>'
     document+=table(['方法','发表来源','已完成 seeds','本机 IoU','本机 Dice','作者 IoU','作者 Dice'],rows)
     document+='<p>† EAT 数值来自作者公开表，IoU 大于 Dice 与同口径二值分割关系不符，尚未澄清，不能当作核实的 SOTA。EAT 论文全文未获得；用户已同意采用官方代码超参数并明确标注。</p>'
     document+='<h2>配方与作者协议的差异</h2>'
