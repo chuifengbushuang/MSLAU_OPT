@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Default is validation/preview. Append --run only after the experiment plan is confirmed.
+# Batch convenience wrapper around the original single-experiment launcher.
 set -euo pipefail
 STUDY_REPOSITORY="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 case "${1:-}" in
@@ -24,8 +24,17 @@ case "${1:-}" in
     ;;
 esac
 shift
-exec "$STUDY_PYTHON" -u "$STUDY_REPOSITORY/tools/run_official_kvasir_study.py" \
-  --paired-protocol "${OFFICIAL_PAIRED_PROTOCOL:-strict-v2}" \
-  --dataset "$STUDY_DATASET" --hiera-checkpoint "$STUDY_HIERA" \
-  --output-root "$STUDY_OUTPUT" --run-name "$STUDY_RUN_NAME" \
-  --gpu "${OFFICIAL_GPU:-0}" --epochs 100 --patience 10 "$@"
+export P51_OUTPUT_ROOT="$STUDY_OUTPUT/$STUDY_RUN_NAME"
+if [[ " $* " == *" --run "* && -e "$P51_OUTPUT_ROOT" ]]; then
+  printf '%s\n' "Run already exists: $P51_OUTPUT_ROOT" >&2
+  exit 1
+fi
+for STUDY_SEED in 1234 42 2026; do
+  for STUDY_EXPERIMENT in exp00_baseline exp03_naf_p12 exp09_naf_discrete \
+      exp00_baseline_paired_strict_v2 exp03_naf_p12_paired_strict_v2 exp09_naf_discrete_paired_strict_v2; do
+    "$STUDY_PYTHON" -u "$STUDY_REPOSITORY/tools/run_experiment.py" "$STUDY_EXPERIMENT" \
+      --split-dir "$STUDY_REPOSITORY/configs/splits/kvasir_medico_official_880_120_v1" \
+      --epochs 100 --patience 10 --fp32 --seed "$STUDY_SEED" --gpu "${OFFICIAL_GPU:-0}" \
+      --dataset "$STUDY_DATASET" --hiera-checkpoint "$STUDY_HIERA" "$@"
+  done
+done

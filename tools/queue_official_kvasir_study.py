@@ -88,7 +88,7 @@ def main():
             write(directory/'dispatch.json',dict(child_pid=child.pid,command=plan['command'],
                 dispatched_utc=datetime.datetime.now(datetime.timezone.utc).isoformat()))
             write(directory/'queue_progress.json',dict(status='running',child_pid=child.pid,queue_pid=os.getpid(),
-                study_progress=str(Path(plan['target_directory'])/'progress.json')))
+                output_directory=plan['target_directory']))
             def stop(signum,frame):
                 if child.poll() is None:child.send_signal(signum)
                 raise SystemExit(128+signum)
@@ -103,7 +103,7 @@ def main():
                 for sig,handler in handlers.items():signal.signal(sig,handler)
         if code:raise RuntimeError(f'New study failed ({code}); inspect study.console.log')
         write(directory/'queue_progress.json',dict(status='completed',
-            summary=str(Path(plan['target_directory'])/'summary.json')))
+            output_directory=plan['target_directory']))
     except BaseException as exc:
         write(directory/'queue_progress.json',dict(status='failed',error=str(exc)))
         raise

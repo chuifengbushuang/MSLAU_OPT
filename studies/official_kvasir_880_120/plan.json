@@ -18,10 +18,11 @@
   "unchanged": {"image_size": 352, "batch": 12, "training_workers": 8, "validation_batch": 6, "standalone_eval_batch": 8, "encoder_lr": 0.001, "decoder_lr": 0.001, "optimizer": "AdamW", "weight_decay": 0.0005, "scheduler": "original CosineAnnealingLR, T_max follows maximum epoch100", "loss": "original Structure loss and original auxiliary weights", "model_and_NAF": "original per-experiment architecture, sampling, regularizers and initialization"},
   "input_and_numerical_protocols": "Original0/3 retain their original protocols, original9 retains paired-v1/non-strict, latest baseline and its NAF controls all use paired-v2/strict CUDA.",
   "initialization": "Fresh official SAM2 Hiera weights for every formal run; never continue a previously trained Kvasir model or a smoke model.",
-  "artifacts": "Independent output directory for each GPU, model and seed; retain three original checkpoint filenames, source snapshots, effective commands, environment, runtime and per-image evaluation.",
+  "artifacts": "Independent output roots per GPU and unique run IDs per model and seed; retain the original three checkpoints, source hashes, runtime override patch, effective commands, environment and original evaluation logs.",
   "evaluation_scope": "The official120 are used for early stopping/checkpoint selection and reporting; no separate independent third test set.",
-  "rtx5070ti_scheduling": "Wait for the already-authorized official Polyper80k, old paper-recipe queue and final audit to complete and their recorded processes to exit. Do not signal or edit those tasks. Then perform six preflight runs and eighteen formal runs.",
-  "rtx3090_scheduling": "Provide command and preparation archive; user starts it on the3090 server. The command first runs six preflights, then eighteen formal runs.",
+  "implementation": "Reuse tools/run_experiment.py with optional split-dir, epochs, patience and fp32 arguments; no dedicated study training loop or distribution archive.",
+  "rtx5070ti_scheduling": "Wait for already-authorized Polyper80k, old paper-recipe queue and final audit to complete and their recorded processes to exit. Then run eighteen experiments through the original launcher.",
+  "rtx3090_scheduling": "Synchronize through Git; user runs the original single-experiment launcher or convenience shell loop for eighteen runs.",
   "history": "Preserve all original splits, experiment definitions, results and checkpoints.",
   "failure_policy": "Stop on failure, changed queued sources or existing output; do not automatically lower precision, reduce batch, change models or repeat failed runs."
 }
