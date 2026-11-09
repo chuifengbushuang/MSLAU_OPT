@@ -134,7 +134,13 @@ if __name__ == "__main__":
         choices=[
             "legacy", "progressive_wavelet", "cascade_reverse",
             "p5_hiera_reverse", "p5_sam2unet", "p5_sam2unet_detail",
-            "p5_sam2unet_detail_multiscale"],
+            "p5_sam2unet_detail_multiscale", "p5_sam2unet_mafa",
+            "p5_sam2unet_mafa_stage", "p5_sam2unet_mafa_v2",
+            "p5_sam2unet_mafa_v3", "p5_sam2unet_mafa_v4",
+            "p5_sam2unet_mafa_v5", "p5_sam2unet_mafa_mr",
+            "p5_sam2unet_mafa_v2gn", "p5_sam2unet_mafa_v2ar",
+            "p5_sam2unet_mafa_v2ag", "p5_sam2unet_mafa_v2_naf",
+            "p5_sam2unet_mafa_v2_nafcascade", "p5_sam2unet_nafcascade"],
         help="decoder architecture used by the checkpoint",
     )
     parser.add_argument(

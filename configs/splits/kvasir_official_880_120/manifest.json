@@ -1,0 +1,18 @@
+{
+  "dataset": "Kvasir-SEG",
+  "source": "official DebeshJha/Kvasir-SEG Data-split (author-recommended)",
+  "split_mode": "official_train_val_mirrored_test",
+  "counts": {
+    "train": 880,
+    "val": 120,
+    "test": 120
+  },
+  "overlap": {
+    "val_test": 120,
+    "train_val": 0
+  },
+  "union": 1000,
+  "missing_images": [],
+  "train_sha256": "1120dec208e9fef362b97a22ecb6ca4d9304709fb8de26d5129db78734b1e21b",
+  "val_sha256": "82e1c895bbe5ba18ad3c11fee2527344e0583ede2a4852155a4f6138a75e1024"
+}

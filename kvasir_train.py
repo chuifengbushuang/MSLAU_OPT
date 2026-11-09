@@ -17,9 +17,11 @@ from albumentations.pytorch import ToTensorV2
 from torch import optim
 from torch.autograd import Variable
 from torch.optim import lr_scheduler
-from torch.utils.data import DataLoader
+from torch.utils.data import ConcatDataset, DataLoader
 
 from loader import binary_class
+from paired_inputs import PairedDataset, EpochRandomSampler, make_worker_init_fn
+from strict_runtime import configure_runtime
 from loss import (
     BCEDiceLoss_binary,
     BCEDiceLovaszLoss_binary,
@@ -56,28 +58,50 @@ def load_ids(txt_path):
     return [sample_id if os.path.splitext(sample_id)[1] else f"{sample_id}.jpg" for sample_id in ids]
 
 
-def get_train_transform(img_size=256):
-    return A.Compose(
-        [
-            A.Resize(img_size, img_size),
+def _clip_to_uint8(image, **kwargs):
+    return np.clip(image, 0, 255).astype(np.uint8)
+
+
+def get_train_transform(img_size=256, strong=False, clahe=False):
+    aug = [A.Resize(img_size, img_size)]
+    if clahe:
+        aug.append(A.Lambda(image=_clip_to_uint8))
+        aug.append(A.CLAHE(clip_limit=2.0, tile_grid_size=(8, 8), p=1.0))
+    if strong:
+        aug += [
+            A.HorizontalFlip(p=0.5),
+            A.VerticalFlip(p=0.5),
+            A.ShiftScaleRotate(
+                shift_limit=0.05, scale_limit=0.1, rotate_limit=15, p=0.5),
+            A.ColorJitter(
+                brightness=0.2, contrast=0.2, saturation=0.2, hue=0.05, p=0.3),
+            A.RandomGamma(gamma_limit=(80, 120), p=0.2),
+            A.CoarseDropout(p=0.3),
+        ]
+    else:
+        aug += [
             A.HorizontalFlip(p=0.25),
             A.VerticalFlip(p=0.25),
             A.ShiftScaleRotate(shift_limit=0, p=0.25),
             A.CoarseDropout(),
-            A.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
-            ToTensorV2(),
         ]
-    )
+    aug += [
+        A.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
+        ToTensorV2(),
+    ]
+    return A.Compose(aug)
 
 
-def get_valid_transform(img_size=256):
-    return A.Compose(
-        [
-            A.Resize(img_size, img_size),
-            A.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
-            ToTensorV2(),
-        ]
-    )
+def get_valid_transform(img_size=256, clahe=False):
+    aug = [A.Resize(img_size, img_size)]
+    if clahe:
+        aug.append(A.Lambda(image=_clip_to_uint8))
+        aug.append(A.CLAHE(clip_limit=2.0, tile_grid_size=(8, 8), p=1.0))
+    aug += [
+        A.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
+        ToTensorV2(),
+    ]
+    return A.Compose(aug)
 
 
 def load_encoder_pretrained(model, requested_path=None):
@@ -231,7 +255,8 @@ class DINOv2FeatureDistiller(nn.Module):
 def train_model(model, criterion, optimizer, scheduler, dataloaders, metric,
                 num_epochs, save_dir, aux_criterion=None, aux_d1_weight=0.0,
                 aux_d2_weight=0.2, aux_d3_weight=0.1, boundary_weight=0.1,
-                distiller=None, distill_weight=0.0):
+                distiller=None, distill_weight=0.0, ema_decay=0.0,
+                epoch_hook=None):
     since = time.time()
     best_loss = float("inf")
     best_loss_epoch = 0
@@ -241,10 +266,22 @@ def train_model(model, criterion, optimizer, scheduler, dataloaders, metric,
     best_iou_model_wts = snapshot_state_dict(model)
     stable_path = os.path.join(save_dir, "kvasir_best_model.pth")
 
+    ema = {}
+    ema_updates = 0
+    if ema_decay and ema_decay > 0:
+        for name, param in model.named_parameters():
+            if param.requires_grad:
+                ema[name] = param.detach().clone()
+        logging.info(
+            "EMA enabled: decay=%.5f over %d trainable tensors",
+            ema_decay, len(ema))
+
     loss_list = {"train": [], "valid": []}
     accuracy_list = {"train": [], "valid": []}
 
     for epoch in range(num_epochs):
+        if epoch_hook is not None:
+            epoch_hook(epoch)
         logging.info("Epoch {}/{}".format(epoch, num_epochs - 1))
         logging.info("-" * 10)
 
@@ -256,13 +293,22 @@ def train_model(model, criterion, optimizer, scheduler, dataloaders, metric,
             else:
                 model.eval()
 
+            ema_backup = None
+            if phase == "valid" and ema:
+                ema_backup = {}
+                with torch.no_grad():
+                    for name, param in model.named_parameters():
+                        if name in ema:
+                            ema_backup[name] = param.detach().clone()
+                            param.copy_(ema[name])
+
             running_loss = 0.0
             running_main_loss = 0.0
             running_iou = 0.0
             running_distill_loss = 0.0
             running_samples = 0
 
-            for inputs, labels, _ in dataloaders[phase]:
+            for inputs, labels, image_ids in dataloaders[phase]:
                 if torch.cuda.is_available():
                     inputs = Variable(inputs.cuda())
                     labels = Variable(labels.cuda())
@@ -274,6 +320,15 @@ def train_model(model, criterion, optimizer, scheduler, dataloaders, metric,
                     labels = labels.unsqueeze(1)
 
                 optimizer.zero_grad()
+                if phase == "train":
+                    enhancer = getattr(
+                        model.progressive_decoder, "frequency_enhancer", None)
+                    if enhancer is not None and hasattr(
+                            enhancer, "set_selection_context"):
+                        enhancer.set_selection_context(
+                            model.naf_seed,
+                            epoch + getattr(model, "naf_epoch_offset", 0),
+                            image_ids)
                 with torch.set_grad_enabled(phase == "train"):
                     model_outputs = model(
                         inputs,
@@ -315,6 +370,11 @@ def train_model(model, criterion, optimizer, scheduler, dataloaders, metric,
                         outputs = model_outputs
                         main_loss = criterion(outputs, labels)
                         loss = main_loss
+                    if (phase == "train" and isinstance(model_outputs, dict)
+                            and "naf_regularization" in model_outputs):
+                        loss = loss + (
+                            model.naf_reg_weight
+                            * model_outputs["naf_regularization"])
                     distill_loss = outputs.new_zeros(())
                     if distiller is not None and phase == "train":
                         distill_loss = distiller(
@@ -325,6 +385,16 @@ def train_model(model, criterion, optimizer, scheduler, dataloaders, metric,
                     if phase == "train":
                         loss.backward()
                         optimizer.step()
+                        if ema:
+                            ema_updates += 1
+                            decay = min(
+                                ema_decay,
+                                (1.0 + ema_updates) / (10.0 + ema_updates))
+                            with torch.no_grad():
+                                for name, param in model.named_parameters():
+                                    if name in ema:
+                                        ema[name].mul_(decay).add_(
+                                            param.detach(), alpha=1.0 - decay)
 
                 batch_samples = inputs.size(0)
                 running_loss += loss.item() * batch_samples
@@ -369,6 +439,12 @@ def train_model(model, criterion, optimizer, scheduler, dataloaders, metric,
                 )
                 logging.info("Current learning rates: %s", learning_rates)
                 scheduler.step()
+
+            if ema_backup is not None:
+                with torch.no_grad():
+                    for name, param in model.named_parameters():
+                        if name in ema_backup:
+                            param.copy_(ema_backup[name])
 
         if epoch % 10 == 0 or epoch == num_epochs - 1:
             log_fusion_scale_stats(model, epoch)
@@ -436,7 +512,13 @@ if __name__ == "__main__":
         choices=[
             "legacy", "progressive_wavelet", "cascade_reverse",
             "p5_hiera_reverse", "p5_sam2unet", "p5_sam2unet_detail",
-            "p5_sam2unet_detail_multiscale"],
+            "p5_sam2unet_detail_multiscale", "p5_sam2unet_mafa",
+            "p5_sam2unet_mafa_stage", "p5_sam2unet_mafa_v2",
+            "p5_sam2unet_mafa_v3", "p5_sam2unet_mafa_v4",
+            "p5_sam2unet_mafa_v5", "p5_sam2unet_mafa_mr",
+            "p5_sam2unet_mafa_v2gn", "p5_sam2unet_mafa_v2ar",
+            "p5_sam2unet_mafa_v2ag", "p5_sam2unet_mafa_v2_naf",
+            "p5_sam2unet_mafa_v2_nafcascade", "p5_sam2unet_nafcascade"],
         help="legacy, P3/P4, legacy P5 hybrid, or official-style SAM2-UNet",
     )
     parser.add_argument(
@@ -498,6 +580,40 @@ if __name__ == "__main__":
     parser.add_argument("--epoch", type=int, default=200, help="epochs")
     parser.add_argument("--seed", type=int, default=1234, help="random seed")
     parser.add_argument(
+        "--paired_deterministic", action="store_true",
+        help="use PairedDataset + EpochRandomSampler (deterministic, decoupled "
+             "per-sample augmentation); for the strict v2 input protocol",
+    )
+    parser.add_argument(
+        "--strict_runtime", action="store_true",
+        help="enable torch.use_deterministic_algorithms(True) strict runtime",
+    )
+    parser.add_argument("--naf_reg_weight", type=float, default=1e-3,
+                        help="NAF regularization weight (train phase only)")
+    parser.add_argument("--naf_epoch_offset", type=int, default=0,
+                        help="epoch offset for cascade NAF Gumbel sampling "
+                             "(use 20 for the second phase)")
+    parser.add_argument(
+        "--ema_decay", type=float, default=0.0,
+        help="EMA decay for trainable weights (0 disables); e.g. 0.999",
+    )
+    parser.add_argument(
+        "--strong_aug", action="store_true",
+        help="use stronger train-time augmentation (color/gamma/flip/affine)",
+    )
+    parser.add_argument(
+        "--clahe", action="store_true",
+        help="apply CLAHE contrast enhancement (train and valid) before normalize",
+    )
+    parser.add_argument(
+        "--extra_dataset", type=str, default=None,
+        help="extra dataset root (with images/ and masks/) concatenated into train",
+    )
+    parser.add_argument(
+        "--extra_train_txt", type=str, default=None,
+        help="id list for --extra_dataset (e.g. CVC train split)",
+    )
+    parser.add_argument(
         "--disable_edge_guidance",
         action="store_true",
         help="disable P2 decoder edge guidance and run the P0-only model",
@@ -520,6 +636,8 @@ if __name__ == "__main__":
         torch.cuda.manual_seed_all(seed)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
+    if getattr(args, "strict_runtime", False):
+        configure_runtime()
 
 
     dataset_path = resolve_path(args.dataset)
@@ -536,19 +654,74 @@ if __name__ == "__main__":
     print(f"Training samples: {len(train_files)}")
     print(f"Validation samples: {len(val_files)}")
 
-    train_dataset = binary_class(
-        dataset_path, train_files, get_train_transform(args.img_size))
+    train_transform = get_train_transform(
+        args.img_size, strong=args.strong_aug, clahe=args.clahe)
     val_dataset = binary_class(
-        dataset_path, val_files, get_valid_transform(args.img_size))
+        dataset_path, val_files,
+        get_valid_transform(args.img_size, clahe=args.clahe))
 
-    train_loader = DataLoader(
-        dataset=train_dataset,
-        batch_size=args.batch,
-        shuffle=True,
-        drop_last=True,
-        num_workers=args.num_workers,
-        pin_memory=torch.cuda.is_available(),
-    )
+    if args.paired_deterministic:
+        if args.extra_dataset:
+            raise ValueError(
+                "--paired_deterministic is not compatible with --extra_dataset")
+        train_dataset = PairedDataset(
+            dataset_path, train_files, train_transform,
+            seed=seed, phase="train", epoch=0)
+        train_sampler = EpochRandomSampler(
+            train_dataset, seed=seed, phase="train")
+        train_worker_init = make_worker_init_fn(
+            seed, "train", lambda: train_dataset.epoch)
+        train_loader = DataLoader(
+            dataset=train_dataset,
+            batch_size=args.batch,
+            sampler=train_sampler,
+            drop_last=True,
+            num_workers=args.num_workers,
+            pin_memory=torch.cuda.is_available(),
+            worker_init_fn=train_worker_init,
+            persistent_workers=False,
+        )
+
+        def epoch_hook(epoch):
+            train_dataset.set_epoch(epoch)
+            train_sampler.set_epoch(epoch)
+
+        logging.info(
+            "Paired deterministic input enabled: paired_aug(corrected, "
+            "decoupled per-op seeds) + EpochRandomSampler, seed=%d", seed)
+    else:
+        train_dataset = binary_class(dataset_path, train_files, train_transform)
+        if (args.extra_dataset is None) != (args.extra_train_txt is None):
+            raise ValueError(
+                "--extra_dataset and --extra_train_txt must be provided together")
+        if args.extra_dataset:
+            extra_dataset_path = resolve_path(args.extra_dataset)
+            extra_train_txt = resolve_path(args.extra_train_txt)
+            if not os.path.exists(extra_dataset_path):
+                raise FileNotFoundError(
+                    "Extra dataset not found: {}".format(extra_dataset_path))
+            if not os.path.exists(extra_train_txt):
+                raise FileNotFoundError(
+                    "Extra train txt not found: {}".format(extra_train_txt))
+            extra_files = load_ids(extra_train_txt)
+            extra_dataset = binary_class(
+                extra_dataset_path, extra_files, train_transform)
+            train_dataset = ConcatDataset([train_dataset, extra_dataset])
+            logging.info(
+                "Extra training data: %s (%d samples) from %s",
+                extra_dataset_path, len(extra_files), extra_train_txt)
+            print("Extra training samples: {} (total {})".format(
+                len(extra_files), len(train_files) + len(extra_files)))
+        train_loader = DataLoader(
+            dataset=train_dataset,
+            batch_size=args.batch,
+            shuffle=True,
+            drop_last=True,
+            num_workers=args.num_workers,
+            pin_memory=torch.cuda.is_available(),
+        )
+        epoch_hook = None
+
     val_loader = DataLoader(
         dataset=val_dataset,
         batch_size=max(1, args.batch // 2),
@@ -612,17 +785,49 @@ if __name__ == "__main__":
         )
     elif model.decoder_mode in {
             "p5_sam2unet", "p5_sam2unet_detail",
-            "p5_sam2unet_detail_multiscale"}:
+            "p5_sam2unet_detail_multiscale", "p5_sam2unet_mafa",
+            "p5_sam2unet_mafa_stage", "p5_sam2unet_mafa_v2",
+            "p5_sam2unet_mafa_v3", "p5_sam2unet_mafa_v4",
+            "p5_sam2unet_mafa_v5", "p5_sam2unet_mafa_mr",
+            "p5_sam2unet_mafa_v2gn", "p5_sam2unet_mafa_v2ar",
+            "p5_sam2unet_mafa_v2ag", "p5_sam2unet_mafa_v2_naf",
+            "p5_sam2unet_mafa_v2_nafcascade", "p5_sam2unet_nafcascade"}:
         if not args.hiera_checkpoint:
             raise ValueError("P5 SAM2-UNet requires --hiera_checkpoint")
         if not os.path.exists(resolve_path(args.hiera_checkpoint)):
             raise FileNotFoundError(
                 "Hiera checkpoint not found: {}".format(
                     resolve_path(args.hiera_checkpoint)))
+        adapter_label = (
+            "block_mafa_v2+nac_naf"
+            if model.decoder_mode == "p5_sam2unet_mafa_v2_naf"
+            else "block_mafa_v2+cascade_naf"
+            if model.decoder_mode == "p5_sam2unet_mafa_v2_nafcascade"
+            else "block_mafa_v2ag"
+            if model.decoder_mode == "p5_sam2unet_mafa_v2ag"
+            else "block_mafa_v2ar"
+            if model.decoder_mode == "p5_sam2unet_mafa_v2ar"
+            else "block_mafa_v2gn"
+            if model.decoder_mode == "p5_sam2unet_mafa_v2gn"
+            else "block_mafa_mr"
+            if model.decoder_mode == "p5_sam2unet_mafa_mr"
+            else "block_mafa_v5"
+            if model.decoder_mode == "p5_sam2unet_mafa_v5"
+            else "block_mafa_v4"
+            if model.decoder_mode == "p5_sam2unet_mafa_v4"
+            else "block_mafa_v3"
+            if model.decoder_mode == "p5_sam2unet_mafa_v3"
+            else "block_mafa_v2"
+            if model.decoder_mode == "p5_sam2unet_mafa_v2"
+            else "block_mafa_stage"
+            if model.decoder_mode == "p5_sam2unet_mafa_stage"
+            else "block_mafa" if model.decoder_mode == "p5_sam2unet_mafa"
+            else "block_prompt")
         logging.info(
-            "P5 SAM2-UNet configuration: adapter=block_prompt bottleneck=32 "
+            "P5 SAM2-UNet configuration: adapter=%s bottleneck=32 "
             "backbone_frozen=%s rfb_channels=64 detail_refinement=%s "
             "aux_d2=%.3f aux_d3=%.3f",
+            adapter_label,
             model.encoder.freeze_backbone,
             model.decoder_mode in {
                 "p5_sam2unet_detail", "p5_sam2unet_detail_multiscale"},
@@ -632,6 +837,58 @@ if __name__ == "__main__":
             logging.info(
                 "P5.4 detail context: H/2 depthwise dilations=(1,3,5) "
                 "concat_1x1_fusion=True")
+        if model.decoder_mode == "p5_sam2unet_mafa":
+            logging.info(
+                "P5 MAFA adapter: multi-scale branches k=1,3,5,7, "
+                "SKNet-style channel-attention fusion, no frequency "
+                "filtering, zero-init residual output")
+        if model.decoder_mode == "p5_sam2unet_mafa_stage":
+            logging.info(
+                "P5 MAFA-stage adapter: stage-adaptive branches "
+                "(88/44 -> k=1,3,5,7 ; 22/11 -> k=1,3), SKNet-style "
+                "channel-attention fusion, no frequency filtering, "
+                "zero-init residual output")
+        if model.decoder_mode == "p5_sam2unet_mafa_v2":
+            logging.info(
+                "P5 MAFA-v2 adapter: stage-adaptive branches, fusion v2 "
+                "(per-branch [GAP;GMP] descriptor + LayerNorm + hidden=64 "
+                "selection MLP), no frequency filtering, zero-init residual")
+        if model.decoder_mode == "p5_sam2unet_mafa_v3":
+            logging.info(
+                "P5 MAFA-v3 adapter: stage-adaptive branches, fusion v3 "
+                "(v2 channel selection + per-pixel spatial branch gate), "
+                "no frequency filtering, zero-init residual")
+        if model.decoder_mode == "p5_sam2unet_mafa_v4":
+            logging.info(
+                "P5 MAFA-v4 adapter: stage-adaptive branches, fusion B "
+                "(v2 + learnable per-branch GMP descriptor scale, init 1), "
+                "no frequency filtering, zero-init residual")
+        if model.decoder_mode == "p5_sam2unet_mafa_v5":
+            logging.info(
+                "P5 MAFA-v5 adapter: true multi-scale pyramid branches "
+                "(1x1 / 3x3dw / 3x3dil6 / global-pool), SKNet channel fusion "
+                "+ variance-based spatial temperature + identity residual, "
+                "zero-init output")
+        if model.decoder_mode == "p5_sam2unet_mafa_mr":
+            logging.info(
+                "P5 MAFA-MR adapter: multi-resolution branches "
+                "(1x1 / 3x3@1x / 3x3@1/2 / 3x3@1/4), v2 SKNet channel fusion, "
+                "no frequency filtering, zero-init residual output")
+        if model.decoder_mode == "p5_sam2unet_mafa_v2gn":
+            logging.info(
+                "P5 MAFA-v2GN adapter: v2 stage-adaptive branches + SKNet "
+                "fusion, per-branch GroupNorm before weighted sum (3a), "
+                "no BN, no frequency filtering, zero-init residual output")
+        if model.decoder_mode == "p5_sam2unet_mafa_v2ar":
+            logging.info(
+                "P5 MAFA-v2AR adapter: v2 branches/SKNet descriptor, "
+                "anchor-residual fusion with independent sigmoid gates "
+                "(feat + sum g_i * (F_i - feat)), no frequency filtering, "
+                "zero-init residual output")
+        if model.decoder_mode == "p5_sam2unet_mafa_v2ag":
+            logging.info(
+                "P5 MAFA-v2AG: v2 adapter unchanged + AttentionGate on "
+                "U-decoder skip connections (A / Attention U-Net style)")
     if args.p5_detail_only:
         if model.decoder_mode not in {
                 "p5_sam2unet_detail", "p5_sam2unet_detail_multiscale"}:
@@ -673,6 +930,14 @@ if __name__ == "__main__":
         load_encoder_pretrained(model, args.pretrained)
     elif args.pretrained:
         raise ValueError("--pretrained is only valid for the original MSLAU encoder")
+    model.naf_reg_weight = args.naf_reg_weight
+    model.naf_epoch_offset = args.naf_epoch_offset
+    model.naf_seed = int(seed)
+    if getattr(model.progressive_decoder, "frequency_enhancer", None) is not None:
+        logging.info(
+            "NAF enabled: variant=%s reg_weight=%.6g epoch_offset=%d",
+            type(model.progressive_decoder.frequency_enhancer).__name__,
+            model.naf_reg_weight, model.naf_epoch_offset)
     if torch.cuda.is_available():
         model = model.cuda()
 
@@ -833,4 +1098,6 @@ if __name__ == "__main__":
         boundary_weight=args.boundary_weight,
         distiller=distiller,
         distill_weight=args.distill_weight,
+        ema_decay=args.ema_decay,
+        epoch_hook=epoch_hook,
     )

@@ -9,6 +9,8 @@ import copy
 
 from networks.msla import MSLA
 from networks.edge_guidance import EdgeGuidedAttention
+from networks.naf_select_reg import PyramidNAF2D
+from networks.naf_discrete import CascadeDiscreteNAF2D
 
 layer_scale = False
 init_value = 1e-6
@@ -272,6 +274,661 @@ class HieraBlockAdapter(nn.Module):
         return self.block(x + self.prompt_learn(x))
 
 
+class HieraBlockAdapterMAFA(nn.Module):
+    """MAFA-inspired prompt adapter applied before each Hiera block.
+
+    Multi-scale convolution branches replace MAFA's frequency filtering, and an
+    SKNet-style channel attention fuses the branch responses adaptively instead
+    of a plain concatenation. The residual output projection is zero
+    initialized so the adapter starts as an identity map over the frozen Hiera
+    features.
+    """
+
+    STAGE_KERNELS = {
+        144: (1, 3, 5, 7),
+        288: (1, 3, 5, 7),
+        576: (1, 3),
+        1152: (1, 3),
+    }
+
+    def __init__(self, block, bottleneck=32, branch_kernels=(1, 3, 5, 7),
+                 reduction=2, stage_adaptive=False):
+        super().__init__()
+        self.block = block
+        dim = block.attn.qkv.in_features
+        if stage_adaptive:
+            branch_kernels = self.STAGE_KERNELS.get(dim, branch_kernels)
+        self.bottleneck = bottleneck
+        self.branch_kernels = tuple(branch_kernels)
+        self.num_branches = len(self.branch_kernels)
+        self.down = nn.Sequential(
+            nn.Conv2d(dim, bottleneck, 1),
+            nn.GELU(),
+        )
+        self.branches = nn.ModuleList([
+            nn.Sequential(
+                nn.Conv2d(bottleneck, bottleneck, kernel, padding=kernel // 2),
+                nn.GELU(),
+            )
+            for kernel in self.branch_kernels
+        ])
+        hidden = max(8, bottleneck // reduction)
+        self.fusion_fc1 = nn.Conv2d(bottleneck, hidden, 1)
+        self.fusion_fc2 = nn.Conv2d(hidden, self.num_branches * bottleneck, 1)
+        self.up = nn.Conv2d(bottleneck, dim, 1)
+        nn.init.zeros_(self.up.weight)
+        nn.init.zeros_(self.up.bias)
+
+    def forward(self, x):
+        # Hiera operates on channels-last tensors: (B, H, W, C).
+        x_nchw = x.permute(0, 3, 1, 2).contiguous()
+        feat = self.down(x_nchw)
+        branch_outputs = [branch(feat) for branch in self.branches]
+
+        descriptor = branch_outputs[0]
+        for branch_output in branch_outputs[1:]:
+            descriptor = descriptor + branch_output
+        descriptor = F.adaptive_avg_pool2d(descriptor, 1)
+        descriptor = self.fusion_fc2(F.gelu(self.fusion_fc1(descriptor)))
+        weights = descriptor.view(
+            -1, self.num_branches, self.bottleneck, 1, 1)
+        weights = torch.softmax(weights, dim=1)
+
+        fused = torch.zeros_like(branch_outputs[0])
+        for index in range(self.num_branches):
+            fused = fused + weights[:, index] * branch_outputs[index]
+
+        delta = self.up(fused).permute(0, 2, 3, 1).contiguous()
+        return self.block(x + delta)
+
+
+class HieraBlockAdapterMAFAv2(nn.Module):
+    """MAFA-inspired prompt adapter (fusion v2).
+
+    Same stage-adaptive multi-scale conv branches as the v1 MAFA adapter, but
+    the fusion step is upgraded following Plan A:
+      - per-branch dual-pooling descriptor [GAP ; GMP] (keeps branch identity
+        and adds a peak-response cue that favours small salient objects),
+      - descriptor concatenated over branches,
+      - LayerNorm + a wider selection MLP (hidden=64),
+      - softmax selection across branches, zero-init residual output.
+    No frequency filtering (removed vs. the original MAFA).
+    """
+
+    STAGE_KERNELS = {
+        144: (1, 3, 5, 7),
+        288: (1, 3, 5, 7),
+        576: (1, 3),
+        1152: (1, 3),
+    }
+
+    def __init__(self, block, bottleneck=32, branch_kernels=(1, 3, 5, 7),
+                 stage_adaptive=True, hidden=64):
+        super().__init__()
+        self.block = block
+        dim = block.attn.qkv.in_features
+        if stage_adaptive:
+            branch_kernels = self.STAGE_KERNELS.get(dim, branch_kernels)
+        self.bottleneck = bottleneck
+        self.branch_kernels = tuple(branch_kernels)
+        self.num_branches = len(self.branch_kernels)
+
+        self.down = nn.Sequential(
+            nn.Conv2d(dim, bottleneck, 1),
+            nn.GELU(),
+        )
+        self.branches = nn.ModuleList([
+            nn.Sequential(
+                nn.Conv2d(bottleneck, bottleneck, kernel, padding=kernel // 2),
+                nn.GELU(),
+            )
+            for kernel in self.branch_kernels
+        ])
+
+        descriptor_dim = 2 * self.num_branches * bottleneck
+        self.fusion_norm = nn.LayerNorm(descriptor_dim)
+        self.fusion_fc1 = nn.Linear(descriptor_dim, hidden)
+        self.fusion_fc2 = nn.Linear(hidden, self.num_branches * bottleneck)
+
+        self.up = nn.Conv2d(bottleneck, dim, 1)
+        nn.init.zeros_(self.up.weight)
+        nn.init.zeros_(self.up.bias)
+
+    def forward(self, x):
+        # Hiera operates on channels-last tensors: (B, H, W, C).
+        x_nchw = x.permute(0, 3, 1, 2).contiguous()
+        feat = self.down(x_nchw)
+        branch_outputs = [branch(feat) for branch in self.branches]
+
+        descriptors = []
+        for branch_output in branch_outputs:
+            gap = F.adaptive_avg_pool2d(branch_output, 1).flatten(1)
+            gmp = branch_output.amax(dim=(2, 3))
+            descriptors.append(torch.cat([gap, gmp], dim=1))
+        descriptor = torch.cat(descriptors, dim=1)
+
+        descriptor = self.fusion_norm(descriptor)
+        descriptor = self.fusion_fc2(F.gelu(self.fusion_fc1(descriptor)))
+        weights = descriptor.view(
+            -1, self.num_branches, self.bottleneck, 1, 1)
+        weights = torch.softmax(weights, dim=1)
+
+        fused = torch.zeros_like(branch_outputs[0])
+        for index in range(self.num_branches):
+            fused = fused + weights[:, index] * branch_outputs[index]
+
+        delta = self.up(fused).permute(0, 2, 3, 1).contiguous()
+        return self.block(x + delta)
+
+
+class HieraBlockAdapterMAFAv3(nn.Module):
+    """MAFA-inspired prompt adapter (fusion v3).
+
+    Fusion module = v2 channel-selective fusion (per-branch [GAP;GMP]
+    descriptor + LayerNorm + hidden=64 MLP) augmented with a lightweight
+    per-pixel spatial branch gate, so large structures can locally re-weight
+    the multi-scale branches instead of relying on a single global choice.
+    No frequency filtering. Zero-init residual output.
+    """
+
+    STAGE_KERNELS = {
+        144: (1, 3, 5, 7),
+        288: (1, 3, 5, 7),
+        576: (1, 3),
+        1152: (1, 3),
+    }
+
+    def __init__(self, block, bottleneck=32, branch_kernels=(1, 3, 5, 7),
+                 stage_adaptive=True, hidden=64):
+        super().__init__()
+        self.block = block
+        dim = block.attn.qkv.in_features
+        if stage_adaptive:
+            branch_kernels = self.STAGE_KERNELS.get(dim, branch_kernels)
+        self.bottleneck = bottleneck
+        self.branch_kernels = tuple(branch_kernels)
+        self.num_branches = len(self.branch_kernels)
+
+        self.down = nn.Sequential(
+            nn.Conv2d(dim, bottleneck, 1),
+            nn.GELU(),
+        )
+        self.branches = nn.ModuleList([
+            nn.Sequential(
+                nn.Conv2d(bottleneck, bottleneck, kernel, padding=kernel // 2),
+                nn.GELU(),
+            )
+            for kernel in self.branch_kernels
+        ])
+
+        descriptor_dim = 2 * self.num_branches * bottleneck
+        self.fusion_norm = nn.LayerNorm(descriptor_dim)
+        self.fusion_fc1 = nn.Linear(descriptor_dim, hidden)
+        self.fusion_fc2 = nn.Linear(hidden, self.num_branches * bottleneck)
+
+        self.spatial_gate = nn.Sequential(
+            nn.Conv2d(self.num_branches * bottleneck, self.num_branches, 1),
+            nn.Sigmoid(),
+        )
+        nn.init.zeros_(self.spatial_gate[0].weight)
+        nn.init.zeros_(self.spatial_gate[0].bias)
+
+        self.up = nn.Conv2d(bottleneck, dim, 1)
+        nn.init.zeros_(self.up.weight)
+        nn.init.zeros_(self.up.bias)
+
+    def forward(self, x):
+        # Hiera operates on channels-last tensors: (B, H, W, C).
+        x_nchw = x.permute(0, 3, 1, 2).contiguous()
+        feat = self.down(x_nchw)
+        branch_outputs = [branch(feat) for branch in self.branches]
+
+        descriptors = []
+        for branch_output in branch_outputs:
+            gap = F.adaptive_avg_pool2d(branch_output, 1).flatten(1)
+            gmp = branch_output.amax(dim=(2, 3))
+            descriptors.append(torch.cat([gap, gmp], dim=1))
+        descriptor = torch.cat(descriptors, dim=1)
+
+        descriptor = self.fusion_norm(descriptor)
+        descriptor = self.fusion_fc2(F.gelu(self.fusion_fc1(descriptor)))
+        a_chan = torch.softmax(
+            descriptor.view(-1, self.num_branches, self.bottleneck, 1, 1),
+            dim=1)
+
+        concat = torch.cat(branch_outputs, dim=1)
+        g_spat = self.spatial_gate(concat).unsqueeze(2)
+        weights = a_chan * g_spat
+
+        fused = torch.zeros_like(branch_outputs[0])
+        for index in range(self.num_branches):
+            fused = fused + weights[:, index] * branch_outputs[index]
+
+        delta = self.up(fused).permute(0, 2, 3, 1).contiguous()
+        return self.block(x + delta)
+
+
+class HieraBlockAdapterMAFAv4(nn.Module):
+    """MAFA-inspired prompt adapter (fusion B / v4).
+
+    Fusion v2 (per-branch [GAP;GMP] descriptor + LayerNorm + hidden=64 MLP,
+    stage-adaptive multi-scale branches, zero-init residual) with one change:
+    the GMP (max-pooling) descriptor of each branch is multiplied by a learnable
+    per-branch scalar initialised to 1. This lets the model decide how much to
+    rely on the peak-response cue, which otherwise biases branch selection
+    towards small objects. Capacity overhead: num_branches params per block.
+    """
+
+    STAGE_KERNELS = {
+        144: (1, 3, 5, 7),
+        288: (1, 3, 5, 7),
+        576: (1, 3),
+        1152: (1, 3),
+    }
+
+    def __init__(self, block, bottleneck=32, branch_kernels=(1, 3, 5, 7),
+                 stage_adaptive=True, hidden=64):
+        super().__init__()
+        self.block = block
+        dim = block.attn.qkv.in_features
+        if stage_adaptive:
+            branch_kernels = self.STAGE_KERNELS.get(dim, branch_kernels)
+        self.bottleneck = bottleneck
+        self.branch_kernels = tuple(branch_kernels)
+        self.num_branches = len(self.branch_kernels)
+
+        self.down = nn.Sequential(
+            nn.Conv2d(dim, bottleneck, 1),
+            nn.GELU(),
+        )
+        self.branches = nn.ModuleList([
+            nn.Sequential(
+                nn.Conv2d(bottleneck, bottleneck, kernel, padding=kernel // 2),
+                nn.GELU(),
+            )
+            for kernel in self.branch_kernels
+        ])
+
+        descriptor_dim = 2 * self.num_branches * bottleneck
+        self.fusion_norm = nn.LayerNorm(descriptor_dim)
+        self.fusion_fc1 = nn.Linear(descriptor_dim, hidden)
+        self.fusion_fc2 = nn.Linear(hidden, self.num_branches * bottleneck)
+        self.gmp_scale = nn.Parameter(torch.ones(self.num_branches))
+
+        self.up = nn.Conv2d(bottleneck, dim, 1)
+        nn.init.zeros_(self.up.weight)
+        nn.init.zeros_(self.up.bias)
+
+    def forward(self, x):
+        # Hiera operates on channels-last tensors: (B, H, W, C).
+        x_nchw = x.permute(0, 3, 1, 2).contiguous()
+        feat = self.down(x_nchw)
+        branch_outputs = [branch(feat) for branch in self.branches]
+
+        descriptors = []
+        for index, branch_output in enumerate(branch_outputs):
+            gap = F.adaptive_avg_pool2d(branch_output, 1).flatten(1)
+            gmp = branch_output.amax(dim=(2, 3))
+            descriptors.append(torch.cat(
+                [gap, self.gmp_scale[index] * gmp], dim=1))
+        descriptor = torch.cat(descriptors, dim=1)
+
+        descriptor = self.fusion_norm(descriptor)
+        descriptor = self.fusion_fc2(F.gelu(self.fusion_fc1(descriptor)))
+        weights = torch.softmax(
+            descriptor.view(-1, self.num_branches, self.bottleneck, 1, 1),
+            dim=1)
+
+        fused = torch.zeros_like(branch_outputs[0])
+        for index in range(self.num_branches):
+            fused = fused + weights[:, index] * branch_outputs[index]
+
+        delta = self.up(fused).permute(0, 2, 3, 1).contiguous()
+        return self.block(x + delta)
+
+
+class HieraBlockAdapterMAFAv5(nn.Module):
+    """MAFA-inspired prompt adapter (fusion v5).
+
+    True multi-scale processing followed by adaptive fusion:
+      - branches: 1x1 local, 3x3 depthwise, 3x3 dilated (rate=6) depthwise,
+        and a global-average-pooled branch (image-level context);
+      - channel SKNet over per-branch [GAP;GMP] descriptors (as in v2);
+      - parameter-free spatial adaptivity: per-pixel/per-channel softmax
+        temperature driven by the cross-branch variance (one learnable scalar,
+        init 0 -> starts identical to the global v2 selection);
+      - identity-preserving residual (+ id_scale * feat, init 0) to counter the
+        area-shrinking / recall-drop bias of convex fusion.
+    Residual output projection is zero-initialised.
+    """
+
+    def __init__(self, block, bottleneck=32, hidden=64, dilation=6):
+        super().__init__()
+        self.block = block
+        dim = block.attn.qkv.in_features
+        self.bottleneck = bottleneck
+        self.num_branches = 4
+
+        self.down = nn.Sequential(
+            nn.Conv2d(dim, bottleneck, 1),
+            nn.GELU(),
+        )
+        self.branch_local = nn.Sequential(
+            nn.Conv2d(bottleneck, bottleneck, 1),
+            nn.GELU(),
+        )
+        self.branch_dw = nn.Sequential(
+            nn.Conv2d(bottleneck, bottleneck, 3, padding=1,
+                      groups=bottleneck, bias=False),
+            nn.Conv2d(bottleneck, bottleneck, 1),
+            nn.GELU(),
+        )
+        self.branch_dil = nn.Sequential(
+            nn.Conv2d(bottleneck, bottleneck, 3, padding=dilation,
+                      dilation=dilation, groups=bottleneck, bias=False),
+            nn.Conv2d(bottleneck, bottleneck, 1),
+            nn.GELU(),
+        )
+        self.branch_global = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Conv2d(bottleneck, bottleneck, 1),
+            nn.GELU(),
+        )
+
+        descriptor_dim = 2 * self.num_branches * bottleneck
+        self.fusion_norm = nn.LayerNorm(descriptor_dim)
+        self.fusion_fc1 = nn.Linear(descriptor_dim, hidden)
+        self.fusion_fc2 = nn.Linear(hidden, self.num_branches * bottleneck)
+
+        self.var_scale = nn.Parameter(torch.zeros(1))
+        self.id_scale = nn.Parameter(torch.zeros(1))
+
+        self.up = nn.Conv2d(bottleneck, dim, 1)
+        nn.init.zeros_(self.up.weight)
+        nn.init.zeros_(self.up.bias)
+
+    def forward(self, x):
+        # Hiera operates on channels-last tensors: (B, H, W, C).
+        x_nchw = x.permute(0, 3, 1, 2).contiguous()
+        feat = self.down(x_nchw)
+        branch_outputs = [
+            self.branch_local(feat),
+            self.branch_dw(feat),
+            self.branch_dil(feat),
+            self.branch_global(feat).expand_as(feat),
+        ]
+
+        descriptors = []
+        for branch_output in branch_outputs:
+            gap = F.adaptive_avg_pool2d(branch_output, 1).flatten(1)
+            gmp = branch_output.amax(dim=(2, 3))
+            descriptors.append(torch.cat([gap, gmp], dim=1))
+        descriptor = torch.cat(descriptors, dim=1)
+        descriptor = self.fusion_norm(descriptor)
+        descriptor = self.fusion_fc2(F.gelu(self.fusion_fc1(descriptor)))
+        logits = descriptor.view(
+            -1, self.num_branches, self.bottleneck, 1, 1)
+
+        stacked = torch.stack(branch_outputs, dim=1)
+        variance = stacked.var(dim=1, unbiased=False)
+        normalised = variance / (
+            variance.mean(dim=(1, 2, 3), keepdim=True) + 1e-6)
+        temperature = 1.0 + self.var_scale * normalised.unsqueeze(1)
+        weights = torch.softmax(logits / temperature, dim=1)
+
+        fused = torch.zeros_like(branch_outputs[0])
+        for index in range(self.num_branches):
+            fused = fused + weights[:, index] * branch_outputs[index]
+        fused = fused + self.id_scale * feat
+
+        delta = self.up(fused).permute(0, 2, 3, 1).contiguous()
+        return self.block(x + delta)
+
+
+class HieraBlockAdapterMAFA_MR(nn.Module):
+    """MAFA-inspired prompt adapter (2a: multi-resolution branches).
+
+    Keeps the v2 channel SKNet fusion (per-branch [GAP;GMP] descriptor +
+    LayerNorm + hidden=64 MLP + softmax over branches + zero-init residual),
+    but replaces the kernel-size branches with genuine multi-resolution
+    branches: 1x1 | 3x3@1x | 3x3@1/2 | 3x3@1/4. Branch outputs are brought
+    back to the input resolution (bilinear) before fusion.
+    """
+
+    def __init__(self, block, bottleneck=32, hidden=64):
+        super().__init__()
+        self.block = block
+        dim = block.attn.qkv.in_features
+        self.bottleneck = bottleneck
+        self.num_branches = 4
+
+        self.down = nn.Sequential(
+            nn.Conv2d(dim, bottleneck, 1),
+            nn.GELU(),
+        )
+        self.branch1 = nn.Sequential(
+            nn.Conv2d(bottleneck, bottleneck, 1),
+            nn.GELU(),
+        )
+        self.branch2 = nn.Sequential(
+            nn.Conv2d(bottleneck, bottleneck, 3, padding=1, bias=False),
+            nn.GELU(),
+        )
+        self.branch3 = nn.Sequential(
+            nn.AvgPool2d(2),
+            nn.Conv2d(bottleneck, bottleneck, 3, padding=1, bias=False),
+            nn.GELU(),
+        )
+        self.branch4 = nn.Sequential(
+            nn.AvgPool2d(4),
+            nn.Conv2d(bottleneck, bottleneck, 3, padding=1, bias=False),
+            nn.GELU(),
+        )
+
+        descriptor_dim = 2 * self.num_branches * bottleneck
+        self.fusion_norm = nn.LayerNorm(descriptor_dim)
+        self.fusion_fc1 = nn.Linear(descriptor_dim, hidden)
+        self.fusion_fc2 = nn.Linear(hidden, self.num_branches * bottleneck)
+
+        self.up = nn.Conv2d(bottleneck, dim, 1)
+        nn.init.zeros_(self.up.weight)
+        nn.init.zeros_(self.up.bias)
+
+    def forward(self, x):
+        # Hiera operates on channels-last tensors: (B, H, W, C).
+        x_nchw = x.permute(0, 3, 1, 2).contiguous()
+        feat = self.down(x_nchw)
+        size = feat.shape[-2:]
+        branch_outputs = [
+            self.branch1(feat),
+            self.branch2(feat),
+            F.interpolate(self.branch3(feat), size=size,
+                          mode="bilinear", align_corners=False),
+            F.interpolate(self.branch4(feat), size=size,
+                          mode="bilinear", align_corners=False),
+        ]
+
+        descriptors = []
+        for branch_output in branch_outputs:
+            gap = F.adaptive_avg_pool2d(branch_output, 1).flatten(1)
+            gmp = branch_output.amax(dim=(2, 3))
+            descriptors.append(torch.cat([gap, gmp], dim=1))
+        descriptor = torch.cat(descriptors, dim=1)
+        descriptor = self.fusion_norm(descriptor)
+        descriptor = self.fusion_fc2(F.gelu(self.fusion_fc1(descriptor)))
+        weights = torch.softmax(
+            descriptor.view(-1, self.num_branches, self.bottleneck, 1, 1),
+            dim=1)
+
+        fused = torch.zeros_like(branch_outputs[0])
+        for index in range(self.num_branches):
+            fused = fused + weights[:, index] * branch_outputs[index]
+
+        delta = self.up(fused).permute(0, 2, 3, 1).contiguous()
+        return self.block(x + delta)
+
+
+class HieraBlockAdapterMAFAv2GN(nn.Module):
+    """MAFA fusion v2 + 3a branch normalization.
+
+    Same as the v2 adapter (stage-adaptive multi-scale branches, per-branch
+    [GAP;GMP] SKNet descriptor, LayerNorm + hidden=64 MLP, softmax over
+    branches, zero-init residual), but each branch output is normalised with a
+    per-sample GroupNorm *before* the weighted sum. The selection descriptor
+    still uses the un-normalised branch statistics. This equalises branch
+    magnitudes so the convex weighted sum does not shrink the feature
+    (anti area-collapse). No BatchNorm, no frequency filtering.
+    """
+
+    STAGE_KERNELS = {
+        144: (1, 3, 5, 7),
+        288: (1, 3, 5, 7),
+        576: (1, 3),
+        1152: (1, 3),
+    }
+
+    def __init__(self, block, bottleneck=32, branch_kernels=(1, 3, 5, 7),
+                 stage_adaptive=True, hidden=64, num_groups=8):
+        super().__init__()
+        self.block = block
+        dim = block.attn.qkv.in_features
+        if stage_adaptive:
+            branch_kernels = self.STAGE_KERNELS.get(dim, branch_kernels)
+        self.bottleneck = bottleneck
+        self.branch_kernels = tuple(branch_kernels)
+        self.num_branches = len(self.branch_kernels)
+
+        self.down = nn.Sequential(
+            nn.Conv2d(dim, bottleneck, 1),
+            nn.GELU(),
+        )
+        self.branches = nn.ModuleList([
+            nn.Sequential(
+                nn.Conv2d(bottleneck, bottleneck, kernel, padding=kernel // 2),
+                nn.GELU(),
+            )
+            for kernel in self.branch_kernels
+        ])
+        self.branch_norms = nn.ModuleList([
+            nn.GroupNorm(num_groups, bottleneck)
+            for _ in range(self.num_branches)
+        ])
+
+        descriptor_dim = 2 * self.num_branches * bottleneck
+        self.fusion_norm = nn.LayerNorm(descriptor_dim)
+        self.fusion_fc1 = nn.Linear(descriptor_dim, hidden)
+        self.fusion_fc2 = nn.Linear(hidden, self.num_branches * bottleneck)
+
+        self.up = nn.Conv2d(bottleneck, dim, 1)
+        nn.init.zeros_(self.up.weight)
+        nn.init.zeros_(self.up.bias)
+
+    def forward(self, x):
+        # Hiera operates on channels-last tensors: (B, H, W, C).
+        x_nchw = x.permute(0, 3, 1, 2).contiguous()
+        feat = self.down(x_nchw)
+        branch_outputs = [branch(feat) for branch in self.branches]
+
+        descriptors = []
+        for branch_output in branch_outputs:
+            gap = F.adaptive_avg_pool2d(branch_output, 1).flatten(1)
+            gmp = branch_output.amax(dim=(2, 3))
+            descriptors.append(torch.cat([gap, gmp], dim=1))
+        descriptor = torch.cat(descriptors, dim=1)
+        descriptor = self.fusion_norm(descriptor)
+        descriptor = self.fusion_fc2(F.gelu(self.fusion_fc1(descriptor)))
+        weights = torch.softmax(
+            descriptor.view(-1, self.num_branches, self.bottleneck, 1, 1),
+            dim=1)
+
+        fused = torch.zeros_like(branch_outputs[0])
+        for index in range(self.num_branches):
+            normalised = self.branch_norms[index](branch_outputs[index])
+            fused = fused + weights[:, index] * normalised
+
+        delta = self.up(fused).permute(0, 2, 3, 1).contiguous()
+        return self.block(x + delta)
+
+
+class HieraBlockAdapterMAFAv2AR(nn.Module):
+    """MAFA fusion v2 + A: anchor-residual with independent sigmoid gates.
+
+    Same stage-adaptive branches and [GAP;GMP] SKNet descriptor as v2, but the
+    combination rule changes from a convex softmax mixture
+        fused = sum_i a_i F_i   (sum_i a_i = 1)
+    to an anchor-residual form with independent (non-normalised) sigmoid gates
+        fused = feat + sum_i g_i * (F_i - feat),   g_i = sigmoid(.)
+    which preserves the projected feature magnitude and can amplify or shrink
+    branch contributions, countering the area-collapse / large-object bias of
+    convex fusion. Gate bias is initialised negative so the module starts close
+    to the identity anchor. Residual output is zero-initialised.
+    """
+
+    STAGE_KERNELS = {
+        144: (1, 3, 5, 7),
+        288: (1, 3, 5, 7),
+        576: (1, 3),
+        1152: (1, 3),
+    }
+
+    def __init__(self, block, bottleneck=32, branch_kernels=(1, 3, 5, 7),
+                 stage_adaptive=True, hidden=64, gate_bias=-2.0):
+        super().__init__()
+        self.block = block
+        dim = block.attn.qkv.in_features
+        if stage_adaptive:
+            branch_kernels = self.STAGE_KERNELS.get(dim, branch_kernels)
+        self.bottleneck = bottleneck
+        self.branch_kernels = tuple(branch_kernels)
+        self.num_branches = len(self.branch_kernels)
+
+        self.down = nn.Sequential(
+            nn.Conv2d(dim, bottleneck, 1),
+            nn.GELU(),
+        )
+        self.branches = nn.ModuleList([
+            nn.Sequential(
+                nn.Conv2d(bottleneck, bottleneck, kernel, padding=kernel // 2),
+                nn.GELU(),
+            )
+            for kernel in self.branch_kernels
+        ])
+
+        descriptor_dim = 2 * self.num_branches * bottleneck
+        self.fusion_norm = nn.LayerNorm(descriptor_dim)
+        self.fusion_fc1 = nn.Linear(descriptor_dim, hidden)
+        self.fusion_fc2 = nn.Linear(hidden, self.num_branches * bottleneck)
+        nn.init.constant_(self.fusion_fc2.bias, gate_bias)
+
+        self.up = nn.Conv2d(bottleneck, dim, 1)
+        nn.init.zeros_(self.up.weight)
+        nn.init.zeros_(self.up.bias)
+
+    def forward(self, x):
+        # Hiera operates on channels-last tensors: (B, H, W, C).
+        x_nchw = x.permute(0, 3, 1, 2).contiguous()
+        feat = self.down(x_nchw)
+        branch_outputs = [branch(feat) for branch in self.branches]
+
+        descriptors = []
+        for branch_output in branch_outputs:
+            gap = F.adaptive_avg_pool2d(branch_output, 1).flatten(1)
+            gmp = branch_output.amax(dim=(2, 3))
+            descriptors.append(torch.cat([gap, gmp], dim=1))
+        descriptor = torch.cat(descriptors, dim=1)
+        descriptor = self.fusion_norm(descriptor)
+        descriptor = self.fusion_fc2(F.gelu(self.fusion_fc1(descriptor)))
+        gates = torch.sigmoid(
+            descriptor.view(-1, self.num_branches, self.bottleneck, 1, 1))
+
+        fused = feat
+        for index in range(self.num_branches):
+            fused = fused + gates[:, index] * (branch_outputs[index] - feat)
+
+        delta = self.up(fused).permute(0, 2, 3, 1).contiguous()
+        return self.block(x + delta)
+
+
 class HieraFeatureEncoder(nn.Module):
     """Frozen SAM2 Hiera backbone with selectable trainable adapters."""
 
@@ -310,6 +967,60 @@ class HieraFeatureEncoder(nn.Module):
             self.adapters = None
             self.backbone.model.blocks = nn.ModuleList([
                 HieraBlockAdapter(block) for block in self.backbone.model.blocks
+            ])
+        elif adapter_mode == "block_mafa":
+            self.adapters = None
+            self.backbone.model.blocks = nn.ModuleList([
+                HieraBlockAdapterMAFA(block)
+                for block in self.backbone.model.blocks
+            ])
+        elif adapter_mode == "block_mafa_stage":
+            self.adapters = None
+            self.backbone.model.blocks = nn.ModuleList([
+                HieraBlockAdapterMAFA(block, stage_adaptive=True)
+                for block in self.backbone.model.blocks
+            ])
+        elif adapter_mode == "block_mafa_v2":
+            self.adapters = None
+            self.backbone.model.blocks = nn.ModuleList([
+                HieraBlockAdapterMAFAv2(block, stage_adaptive=True, hidden=64)
+                for block in self.backbone.model.blocks
+            ])
+        elif adapter_mode == "block_mafa_v3":
+            self.adapters = None
+            self.backbone.model.blocks = nn.ModuleList([
+                HieraBlockAdapterMAFAv3(block, stage_adaptive=True, hidden=64)
+                for block in self.backbone.model.blocks
+            ])
+        elif adapter_mode == "block_mafa_v4":
+            self.adapters = None
+            self.backbone.model.blocks = nn.ModuleList([
+                HieraBlockAdapterMAFAv4(block, stage_adaptive=True, hidden=64)
+                for block in self.backbone.model.blocks
+            ])
+        elif adapter_mode == "block_mafa_v5":
+            self.adapters = None
+            self.backbone.model.blocks = nn.ModuleList([
+                HieraBlockAdapterMAFAv5(block, hidden=64)
+                for block in self.backbone.model.blocks
+            ])
+        elif adapter_mode == "block_mafa_mr":
+            self.adapters = None
+            self.backbone.model.blocks = nn.ModuleList([
+                HieraBlockAdapterMAFA_MR(block, hidden=64)
+                for block in self.backbone.model.blocks
+            ])
+        elif adapter_mode == "block_mafa_v2gn":
+            self.adapters = None
+            self.backbone.model.blocks = nn.ModuleList([
+                HieraBlockAdapterMAFAv2GN(block, stage_adaptive=True, hidden=64)
+                for block in self.backbone.model.blocks
+            ])
+        elif adapter_mode == "block_mafa_v2ar":
+            self.adapters = None
+            self.backbone.model.blocks = nn.ModuleList([
+                HieraBlockAdapterMAFAv2AR(block, stage_adaptive=True, hidden=64)
+                for block in self.backbone.model.blocks
             ])
         else:
             raise ValueError("Unsupported Hiera adapter mode: {}".format(adapter_mode))
@@ -855,6 +1566,58 @@ class SAM2UNetUp(nn.Module):
         return self.conv(torch.cat([skip, decoder], dim=1))
 
 
+class AttentionGate(nn.Module):
+    """Attention gate on a skip connection (Attention U-Net style).
+
+    Uses the up-sampled decoder signal (gate) to modulate the encoder skip so
+    that background/irrelevant responses are suppressed before concatenation.
+    """
+
+    def __init__(self, channels, inter_channels=None):
+        super().__init__()
+        inter_channels = inter_channels or max(1, channels // 2)
+        self.Wg = nn.Sequential(
+            nn.Conv2d(channels, inter_channels, 1, bias=False),
+            nn.BatchNorm2d(inter_channels),
+        )
+        self.Wx = nn.Sequential(
+            nn.Conv2d(channels, inter_channels, 1, bias=False),
+            nn.BatchNorm2d(inter_channels),
+        )
+        self.psi = nn.Sequential(
+            nn.Conv2d(inter_channels, 1, 1),
+            nn.BatchNorm2d(1),
+            nn.Sigmoid(),
+        )
+
+    def forward(self, skip, gate):
+        attention = torch.relu(self.Wg(gate) + self.Wx(skip))
+        attention = self.psi(attention)
+        return skip * attention
+
+
+class SAM2UNetUpAttn(nn.Module):
+    """SAM2UNetUp with an attention gate applied to the encoder skip."""
+
+    def __init__(self, channels=64):
+        super().__init__()
+        self.attn = AttentionGate(channels)
+        self.conv = nn.Sequential(
+            nn.Conv2d(2 * channels, channels, 3, padding=1, bias=False),
+            nn.BatchNorm2d(channels),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(channels, channels, 3, padding=1, bias=False),
+            nn.BatchNorm2d(channels),
+            nn.ReLU(inplace=True),
+        )
+
+    def forward(self, decoder, skip):
+        decoder = F.interpolate(
+            decoder, size=skip.shape[-2:], mode="bilinear", align_corners=True)
+        skip = self.attn(skip, decoder)
+        return self.conv(torch.cat([skip, decoder], dim=1))
+
+
 class MultiScaleDepthwiseDetail(nn.Module):
     """Lightweight local-context block at half input resolution."""
 
@@ -940,15 +1703,16 @@ class SAM2UNetDecoder(nn.Module):
 
     def __init__(self, encoder_channels=(144, 288, 576, 1152), channels=64,
                  num_classes=1, use_detail_refinement=False,
-                 use_multiscale_detail=False):
+                 use_multiscale_detail=False, use_skip_attention=False, naf=None):
         super().__init__()
         self.use_detail_refinement = use_detail_refinement
         self.rfbs = nn.ModuleList([
             RFBModified(in_channels, channels) for in_channels in encoder_channels
         ])
-        self.up1 = SAM2UNetUp(channels)
-        self.up2 = SAM2UNetUp(channels)
-        self.up3 = SAM2UNetUp(channels)
+        up_cls = SAM2UNetUpAttn if use_skip_attention else SAM2UNetUp
+        self.up1 = up_cls(channels)
+        self.up2 = up_cls(channels)
+        self.up3 = up_cls(channels)
         self.side1 = nn.Conv2d(channels, num_classes, 1)
         self.side2 = nn.Conv2d(channels, num_classes, 1)
         self.head = nn.Conv2d(channels, num_classes, 1)
@@ -961,6 +1725,14 @@ class SAM2UNetDecoder(nn.Module):
             )
             if use_detail_refinement else None
         )
+        if naf == "p12":
+            self.frequency_enhancer = PyramidNAF2D(active_stages=(1, 2))
+        elif naf == "cascade":
+            self.frequency_enhancer = CascadeDiscreteNAF2D(channels=channels)
+        elif naf is None:
+            self.frequency_enhancer = None
+        else:
+            raise ValueError("Unsupported NAF variant: {}".format(naf))
 
     @staticmethod
     def resize_logits(logits, output_size):
@@ -970,9 +1742,20 @@ class SAM2UNetDecoder(nn.Module):
 
     def forward(self, encoder_features, output_size, return_aux=False,
                 normalized_image=None):
-        e1, e2, e3, e4 = [
+        features = [
             rfb(feature) for rfb, feature in zip(self.rfbs, encoder_features)
         ]
+        naf_regularization = None
+        naf_stats = None
+        naf_fusion_stats = None
+        if self.frequency_enhancer is not None:
+            naf_outputs = self.frequency_enhancer(features)
+            features = naf_outputs[0]
+            naf_regularization = naf_outputs[1]
+            naf_stats = naf_outputs[2]
+            if len(naf_outputs) >= 4:
+                naf_fusion_stats = naf_outputs[3]
+        e1, e2, e3, e4 = features
         d3 = self.up1(e4, e3)
         d2 = self.up2(d3, e2)
         d1 = self.up3(d2, e1)
@@ -984,11 +1767,17 @@ class SAM2UNetDecoder(nn.Module):
             logits = logits + self.resize_logits(delta_logits, output_size)
         if not return_aux:
             return logits
-        return {
+        output = {
             "logits": logits,
             "aux_d2": self.resize_logits(self.side2(d2), output_size),
             "aux_d3": self.resize_logits(self.side1(d3), output_size),
         }
+        if naf_regularization is not None:
+            output["naf_regularization"] = naf_regularization
+            output["naf_stats"] = naf_stats
+            if naf_fusion_stats is not None:
+                output["naf_fusion_stats"] = naf_fusion_stats
+        return output
 
 
 class MSLAU_net(nn.Module):
@@ -1003,7 +1792,11 @@ class MSLAU_net(nn.Module):
         if decoder_mode not in {
                 "legacy", "progressive_wavelet", "cascade_reverse",
                 "p5_hiera_reverse", "p5_sam2unet",
-                "p5_sam2unet_detail", "p5_sam2unet_detail_multiscale"}:
+                "p5_sam2unet_detail", "p5_sam2unet_detail_multiscale",
+                "p5_sam2unet_mafa", "p5_sam2unet_mafa_stage",
+                "p5_sam2unet_mafa_v2", "p5_sam2unet_mafa_v3",
+                "p5_sam2unet_mafa_v4", "p5_sam2unet_mafa_v5",
+                "p5_sam2unet_mafa_mr", "p5_sam2unet_mafa_v2gn", "p5_sam2unet_mafa_v2ar", "p5_sam2unet_mafa_v2ag", "p5_sam2unet_mafa_v2_naf", "p5_sam2unet_mafa_v2_nafcascade", "p5_sam2unet_nafcascade"}:
             raise ValueError("Unsupported decoder mode: {}".format(decoder_mode))
         if decoder_mode != "legacy" and fusion_mode != "fixed":
             raise ValueError("Progressive decoders require fusion_mode='fixed'")
@@ -1011,12 +1804,20 @@ class MSLAU_net(nn.Module):
             raise ValueError("Unsupported encoder: {}".format(encoder_name))
         if decoder_mode in {
                 "p5_hiera_reverse", "p5_sam2unet",
-                "p5_sam2unet_detail", "p5_sam2unet_detail_multiscale"
+                "p5_sam2unet_detail", "p5_sam2unet_detail_multiscale",
+                "p5_sam2unet_mafa", "p5_sam2unet_mafa_stage",
+                "p5_sam2unet_mafa_v2", "p5_sam2unet_mafa_v3",
+                "p5_sam2unet_mafa_v4", "p5_sam2unet_mafa_v5",
+                "p5_sam2unet_mafa_mr", "p5_sam2unet_mafa_v2gn", "p5_sam2unet_mafa_v2ar", "p5_sam2unet_mafa_v2ag", "p5_sam2unet_mafa_v2_naf", "p5_sam2unet_mafa_v2_nafcascade", "p5_sam2unet_nafcascade"
         } and encoder_name != "sam2_hiera_large":
             raise ValueError("P5 requires encoder_name='sam2_hiera_large'")
         if encoder_name == "sam2_hiera_large" and decoder_mode not in {
                 "p5_hiera_reverse", "p5_sam2unet",
-                "p5_sam2unet_detail", "p5_sam2unet_detail_multiscale"}:
+                "p5_sam2unet_detail", "p5_sam2unet_detail_multiscale",
+                "p5_sam2unet_mafa", "p5_sam2unet_mafa_stage",
+                "p5_sam2unet_mafa_v2", "p5_sam2unet_mafa_v3",
+                "p5_sam2unet_mafa_v4", "p5_sam2unet_mafa_v5",
+                "p5_sam2unet_mafa_mr", "p5_sam2unet_mafa_v2gn", "p5_sam2unet_mafa_v2ar", "p5_sam2unet_mafa_v2ag", "p5_sam2unet_mafa_v2_naf", "p5_sam2unet_mafa_v2_nafcascade", "p5_sam2unet_nafcascade"}:
             raise ValueError("SAM2 Hiera encoder is currently reserved for P5")
         self.img_size = img_size
         self.norm_cfg = None
@@ -1044,9 +1845,30 @@ class MSLAU_net(nn.Module):
                 checkpoint_path=hiera_checkpoint,
                 freeze_backbone=freeze_hiera_backbone,
                 adapter_mode=(
-                    "block_prompt" if decoder_mode in {
+                    "block_mafa_v2ar"
+                    if decoder_mode == "p5_sam2unet_mafa_v2ar"
+                    else "block_mafa_v2gn"
+                    if decoder_mode == "p5_sam2unet_mafa_v2gn"
+                    else "block_mafa_mr"
+                    if decoder_mode == "p5_sam2unet_mafa_mr"
+                    else "block_mafa_v5"
+                    if decoder_mode == "p5_sam2unet_mafa_v5"
+                    else "block_mafa_v4"
+                    if decoder_mode == "p5_sam2unet_mafa_v4"
+                    else "block_mafa_v3"
+                    if decoder_mode == "p5_sam2unet_mafa_v3"
+                    else "block_mafa_v2"
+                    if decoder_mode in {
+                        "p5_sam2unet_mafa_v2", "p5_sam2unet_mafa_v2ag",
+                        "p5_sam2unet_mafa_v2_naf",
+                        "p5_sam2unet_mafa_v2_nafcascade"}
+                    else "block_mafa_stage"
+                    if decoder_mode == "p5_sam2unet_mafa_stage"
+                    else "block_mafa" if decoder_mode == "p5_sam2unet_mafa"
+                    else "block_prompt" if decoder_mode in {
                         "p5_sam2unet", "p5_sam2unet_detail",
-                        "p5_sam2unet_detail_multiscale"}
+                        "p5_sam2unet_detail_multiscale",
+                        "p5_sam2unet_nafcascade"}
                     else "stage_output"),
             )
             encoder_channels = self.encoder.out_channels
@@ -1084,6 +1906,13 @@ class MSLAU_net(nn.Module):
                     dropout=decoder_dropout,
                 )
             else:
+                naf_kind = None
+                if decoder_mode == "p5_sam2unet_mafa_v2_naf":
+                    naf_kind = "p12"
+                elif decoder_mode == "p5_sam2unet_mafa_v2_nafcascade":
+                    naf_kind = "cascade"
+                elif decoder_mode == "p5_sam2unet_nafcascade":
+                    naf_kind = "cascade"
                 self.progressive_decoder = SAM2UNetDecoder(
                     encoder_channels=encoder_channels,
                     channels=64,
@@ -1094,6 +1923,9 @@ class MSLAU_net(nn.Module):
                             "p5_sam2unet_detail_multiscale"}),
                     use_multiscale_detail=(
                         decoder_mode == "p5_sam2unet_detail_multiscale"),
+                    use_skip_attention=(
+                        decoder_mode == "p5_sam2unet_mafa_v2ag"),
+                    naf=naf_kind,
                 )
 
     def enable_p5_detail_only_tuning(self):
